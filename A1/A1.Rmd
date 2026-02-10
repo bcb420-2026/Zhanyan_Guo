@@ -1,0 +1,257 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r setup, include=FALSE}
+required_pkgs <- c(
+  "DBI",
+  "RSQLite",
+  "biomaRt",
+  "dplyr"
+)
+
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+```
+
+```{r download-datasets}
+# Create data directory if it doesn't exist
+dir.create("data", showWarnings = FALSE)
+
+# GSE205677 (NGT control + palmitate-treated dataset)
+file_205677 <- "data/GSE205677_counts.tsv.gz"
+url_205677  <- "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE205nnn/GSE205677/suppl/GSE205677_counts.tsv.gz"
+
+if (!file.exists(file_205677)) {
+  download.file(url_205677, destfile = file_205677, mode = "wb")
+}
+
+# Verify file exists
+file.exists(file_205677)
+```
+Data Created
+```{r inspect-raw-dataset}
+# Read raw count matrix (GSE205677)
+counts <- read.table(
+  "data/GSE205677_counts.tsv.gz",
+  header = TRUE,
+  row.names = 1,
+  sep = "\t",
+  check.names = FALSE
+)
+
+# Record dataset information
+data <- list(
+  data = counts,
+  description = paste(
+    "Raw bulk RNA-seq gene-level count matrix from GSE205677.",
+    "Rows correspond to Ensembl gene identifiers.",
+    "Columns correspond to individual RNA-seq libraries from",
+    "primary human skeletal muscle myotubes with normal glucose tolerance (NGT).",
+    "Samples include both control (NGT_CTL) and palmitate-treated (NGT_PAL)",
+    "conditions, collected across multiple time points and biological replicates."
+  ),
+  processing = c(
+    "RNA sequencing",
+    "read alignment",
+    "gene-level read counting"
+  )
+)
+
+# dim check
+dim(data$data)
+```
+
+```{r inspect-and-record-headers}
+# Inspect column headers
+head(colnames(data$data), 10)
+
+# Inspect first few rows of the count matrix
+head(data$data, 5)
+
+# Record inspection step in processing history
+data$processing <- c(
+  data$processing,
+  "inspection"
+)
+
+# View updated processing record
+data$processing
+```
+```{r define-conditions}
+# Extract sample names
+samples <- colnames(data$data)
+
+# Define condition based on column names
+condition <- ifelse(grepl("_PAL_", samples), "Treatment", "Control")
+
+table(condition)
+```
+
+```{r extract-timepoints}
+# Extract time point (e.g. 12h, 18h, ...)
+timepoint <- sub(".*_([0-9]+h)_i[0-9]+$", "\\1", samples)
+
+table(timepoint)
+table(condition, timepoint)
+```
+
+```{r compute-overall-library-size}
+# Total reads per sample
+library_size <- colSums(data$data)
+
+summary(library_size)
+```
+
+```{r build-sample-metadata}
+sample_info <- data.frame(
+  sample     = samples,
+  condition  = condition,
+  timepoint  = timepoint,
+  library_size = library_size,
+  stringsAsFactors = FALSE
+)
+
+library_summary <- aggregate(
+  library_size ~ condition + timepoint,
+  data = sample_info,
+  FUN = function(x) c(
+    n = length(x),
+    mean = mean(x),
+    median = median(x),
+    min = min(x),
+    max = max(x)
+  )
+)
+```
+
+```{r plot-library-size, fig.width=7, fig.height=4}
+boxplot(
+  library_size ~ condition + timepoint,
+  data = sample_info,
+  las = 2,
+  ylab = "Total read count per library",
+  main = "Library size by condition and time point"
+)
+```
+
+
+```{r include ensembl}
+library(biomaRt)
+ensembl_version <- 115
+ensembl <- useEnsembl(biomart = "ensembl",version = ensembl_version)
+ensembl <- useDataset(
+  "hsapiens_gene_ensembl",
+  mart = ensembl
+)
+```
+
+```{r Prep ids}
+# Extract Ensembl gene IDs from count matrix
+ensembl_ids <- rownames(data$data)
+
+# Strip version suffix if present (safe even if none exist)
+strip_ensembl_version <- function(x) sub("\\..*$", "", x)
+ensembl_ids_clean <- strip_ensembl_version(ensembl_ids)
+
+length(ensembl_ids_clean)
+head(ensembl_ids_clean)
+```
+
+```{r Mapping}
+gene_map <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol"),
+  filters    = "ensembl_gene_id",
+  values     = ensembl_ids_clean,
+  mart       = ensembl
+)
+
+dim(gene_map)
+head(gene_map)
+```
+
+```{r Cache mapping}
+cache_file <- "data/ensembl_to_hgnc_map.rds"
+
+if (!file.exists(cache_file)) {
+  saveRDS(gene_map, cache_file)
+} else {
+  gene_map <- readRDS(cache_file)
+}
+```
+
+```{r handling mapping conflicts}
+# Convert counts to data frame with gene IDs
+counts_df <- as.data.frame(data$data)
+counts_df$ensembl_gene_id <- ensembl_ids_clean
+```
+Ensembl IDs mapping to multiple symbols (ambiguous)
+These ids will be assigned na.
+```{r}
+ambiguous_ensembl <- gene_map %>%
+  group_by(ensembl_gene_id) %>%
+  summarise(n_symbols = n_distinct(hgnc_symbol)) %>%
+  filter(n_symbols > 1)
+
+ambiguous_ensembl
+```
+2Multiple Ensembl IDs mapping to the same symbol
+These will be kept sperate but given same symbol.
+```{r}
+multi_ensembl_per_symbol <- gene_map %>%
+  filter(hgnc_symbol != "") %>%
+  group_by(hgnc_symbol) %>%
+  summarise(n_genes = n_distinct(ensembl_gene_id)) %>%
+  filter(n_genes > 1)
+
+multi_ensembl_per_symbol
+```
+
+
+```{r Merge annotation}
+# Identify ambiguous Ensembl IDs
+ambiguous_ids <- ambiguous_ensembl$ensembl_gene_id
+
+# Clean gene_map
+gene_map_clean <- gene_map %>%
+  mutate(
+    hgnc_symbol = ifelse(
+      ensembl_gene_id %in% ambiguous_ids,
+      NA,
+      hgnc_symbol
+    )
+  ) %>%
+  distinct(ensembl_gene_id, hgnc_symbol)
+
+# Join HGNC symbols
+counts_annotated <- counts_df %>%
+  left_join(gene_map, by = "ensembl_gene_id")
+
+# Reorder columns: annotation first
+counts_annotated <- counts_annotated %>%
+  relocate(ensembl_gene_id, hgnc_symbol)
+
+# Record back into main data object
+data$data <- counts_annotated
+
+# Record processing step
+data$processing <- c(
+  data$processing,
+  "Ensembl gene Mapping"
+)
+
+head(data$data[, 1:6])
+```
+
+```{r check duplication}
+# total genes symbols
+table(!is.na(counts_annotated$hgnc_symbol))
+
+# duplicated symbols
+sum(duplicated(counts_annotated$hgnc_symbol, na.rm = TRUE))
+```
+Given the robustness of downstream RNA-seq statistical methods to extreme values, no outlier removal was performed in the absence of independent evidence of technical failure.
