@@ -2,12 +2,14 @@
 title: "R Notebook"
 output: html_notebook
 ---
+
 ```{r setup, include=FALSE}
 required_pkgs <- c(
   "DBI",
   "RSQLite",
   "biomaRt",
-  "dplyr"
+  "dplyr",
+  "edgeR"
 )
 
 for (pkg in required_pkgs) {
@@ -33,7 +35,9 @@ if (!file.exists(file_205677)) {
 # Verify file exists
 file.exists(file_205677)
 ```
+
 Data Created
+
 ```{r inspect-raw-dataset}
 # Read raw count matrix (GSE205677)
 counts <- read.table(
@@ -82,6 +86,7 @@ data$processing <- c(
 # View updated processing record
 data$processing
 ```
+
 ```{r define-conditions}
 # Extract sample names
 samples <- colnames(data$data)
@@ -139,7 +144,6 @@ boxplot(
 )
 ```
 
-
 ```{r include ensembl}
 library(biomaRt)
 ensembl_version <- 115
@@ -189,8 +193,9 @@ if (!file.exists(cache_file)) {
 counts_df <- as.data.frame(data$data)
 counts_df$ensembl_gene_id <- ensembl_ids_clean
 ```
-Ensembl IDs mapping to multiple symbols (ambiguous)
-These ids will be assigned na.
+
+Ensembl IDs mapping to multiple symbols (ambiguous) These ids will be assigned na.
+
 ```{r}
 ambiguous_ensembl <- gene_map %>%
   group_by(ensembl_gene_id) %>%
@@ -199,8 +204,9 @@ ambiguous_ensembl <- gene_map %>%
 
 ambiguous_ensembl
 ```
-2Multiple Ensembl IDs mapping to the same symbol
-These will be kept sperate but given same symbol.
+
+2Multiple Ensembl IDs mapping to the same symbol These will be kept sperate but given same symbol.
+
 ```{r}
 multi_ensembl_per_symbol <- gene_map %>%
   filter(hgnc_symbol != "") %>%
@@ -210,7 +216,6 @@ multi_ensembl_per_symbol <- gene_map %>%
 
 multi_ensembl_per_symbol
 ```
-
 
 ```{r Merge annotation}
 # Identify ambiguous Ensembl IDs
@@ -254,4 +259,310 @@ table(!is.na(counts_annotated$hgnc_symbol))
 # duplicated symbols
 sum(duplicated(counts_annotated$hgnc_symbol, na.rm = TRUE))
 ```
-Given the robustness of downstream RNA-seq statistical methods to extreme values, no outlier removal was performed in the absence of independent evidence of technical failure.
+
+Given the robustness of downstream RNA-seq statistical methods to extreme values, no outlier removal was performed at this stage in the absence of independent evidence of technical failure.
+
+Pre normalization
+
+```{r remove low count genes}
+# Identify count columns (exclude annotation)
+count_cols <- !(colnames(data$data) %in% c("ensembl_gene_id", "hgnc_symbol"))
+
+counts_mat <- as.matrix(data$data[, count_cols])
+
+# Define filtering threshold
+min_count   <- 10
+min_samples <- 10
+
+keep_genes <- rowSums(counts_mat >= min_count) >= min_samples
+
+table(keep_genes)
+
+# Filter the full data object (annotation + counts)
+data$data_filtered <- data$data[keep_genes, ]
+
+dim(data$data_filtered)
+
+data$processing <- c(
+  data$processing,
+  paste0(
+    "Low-count gene filtering: retained genes with ≥ ",
+    min_count, " counts in ≥ ",
+    min_samples, " samples"
+  )
+)
+
+data$processing
+```
+
+Define plot functions:
+
+```{r plt functions}
+plot_box <- function(mat, main = "") {
+  boxplot(
+    log2(mat + 1),
+    outline = FALSE,
+    las = 2,
+    main = main,
+    ylab = "log2(count + 1)"
+  )
+}
+
+plot_density <- function(mat, main = "") {
+  mat <- log2(mat + 1)
+  dens <- apply(mat, 2, density)
+  
+  plot(dens[[1]], col = "grey50", main = main, xlab = "log2(count + 1)")
+  for (i in 2:length(dens)) {
+    lines(dens[[i]], col = "grey50")
+  }
+}
+
+```
+
+Define time point grouping function:
+
+```{r use datamatrix to produce time point grouped submatrix}
+split_by_timepoint <- function(count_matrix, sample_names = colnames(count_matrix)) {
+  
+  # Extract time point from sample names (e.g. 12h, 18h, ...)
+  timepoint <- sub(".*_([0-9]+h)_i[0-9]+$", "\\1", sample_names)
+  
+  # Split sample names by time point
+  samples_by_tp <- split(sample_names, timepoint)
+  
+  # Create a list of sub-matrices
+  count_by_tp <- lapply(samples_by_tp, function(samps) {
+    count_matrix[, samps, drop = FALSE]
+  })
+  
+  return(count_by_tp)
+}
+
+```
+
+```{r inspect raw distribution by timepoints}
+inspect_timepoint_counts <- function(counts_by_tp) {
+  for (tp in names(counts_by_tp)) {
+    message("Inspecting time point: ", tp)
+    
+    mat <- counts_by_tp[[tp]]
+    
+    cat("Dimensions:", dim(mat), "\n")
+    print(summary(as.vector(mat)))
+    
+    plot_box(mat, main = paste("Raw counts –", tp))
+    plot_density(mat, main = paste("Raw counts density –", tp))
+  }
+}
+
+```
+
+```{r Inspection Results}
+counts_raw <- as.matrix(data$data[, -c(1, 2)])  
+samples <- colnames(counts_raw)
+counts_by_timepoint <- split_by_timepoint(counts_raw)
+inspect_timepoint_counts(counts_by_timepoint)
+```
+
+```{r Extract desgin matrix from naming}
+## ---- design-matrix-from-names ----
+
+# Extract sample names
+samples <- colnames(data$data)
+
+# Build sample metadata directly from column names
+sample_data <- data.frame(
+  sample    = samples,
+  treatment = sub(".*_(CTL|PAL)_.*", "\\1", samples),
+  timepoint = sub(".*_([0-9]+h)_.*", "\\1", samples),
+  replicate = sub(".*_(i[0-9]+)$", "\\1", samples),
+  stringsAsFactors = FALSE
+)
+
+# Define biological condition: treatment × timepoint
+sample_data$condition <- paste(
+  sample_data$treatment,
+  sample_data$timepoint,
+  sep = "_"
+)
+
+# Inspect true sample sizes per condition
+table(sample_data$condition)
+
+# Construct design matrix
+design <- model.matrix(~ 0 + condition, data = sample_data)
+rownames(design) <- sample_data$sample
+colnames(design) <- levels(factor(sample_data$condition))
+
+# Inspect design matrix
+head(design)
+
+```
+
+```{r Normalization setup}
+## ---- prepare-filtered-counts ----
+
+count_cols <- !(colnames(data$data_filtered) %in% c("ensembl_gene_id", "hgnc_symbol"))
+
+counts_filtered <- as.matrix(
+  data$data_filtered[, count_cols]
+)
+
+storage.mode(counts_filtered) <- "integer"
+
+dim(counts_filtered)
+```
+
+```{r filter-with-design}
+library(edgeR)
+
+dge <- DGEList(counts = counts_filtered)
+
+keep <- filterByExpr(
+  dge,
+  design = design,
+  min.count = 10
+)
+
+table(keep)
+
+dge_filtered <- dge[keep, , keep.lib.sizes = FALSE]
+
+dim(dge_filtered)
+```
+
+```{r TMM normalization (design-aware)}
+
+dge_filtered <- calcNormFactors(dge_filtered, method = "TMM")
+
+dge_filtered$samples
+```
+
+```{r Compute normalized CPM}
+
+norm_cpm <- cpm(
+  dge_filtered,
+  log = FALSE,
+  prior.count = 1
+)
+
+dim(norm_cpm)
+```
+
+```{r }
+## ---- post-qc-timepoint-inspection-normalized ----
+
+# Use normalized CPM matrix instead of raw counts
+counts_norm <- norm_cpm
+
+# Confirm sample names
+samples <- colnames(counts_norm)
+
+# Split normalized counts by timepoint
+counts_by_timepoint <- split_by_timepoint(counts_norm)
+
+# Inspect per-timepoint distributions (boxplots / density)
+inspect_timepoint_counts(counts_by_timepoint)
+
+```
+
+```{r set up MDS plotting}
+library(RColorBrewer)
+## ---- align-metadata ----
+
+# Extract sample names actually present in dge_filtered
+dge_samples <- colnames(dge_filtered)
+
+# Reorder and subset metadata
+meta <- sample_data[match(dge_samples, sample_data$sample), ]
+```
+
+MDS 1 — colored by treatment (CTL vs PAL)
+
+```{r}
+treatment_cols <- brewer.pal(
+  length(unique(meta$treatment)),
+  "Set2"
+)
+names(treatment_cols) <- unique(meta$treatment)
+
+plotMDS(
+  dge_filtered,
+  col = treatment_cols[meta$treatment],
+  labels = meta$treatment,
+  main = "MDS (colored by treatment)"
+)
+
+legend(
+  "topright",
+  legend = names(treatment_cols),
+  col = treatment_cols,
+  pch = 16,
+  bty = "n"
+)
+```
+
+MDS 2 — colored by timepoint
+
+```{r}
+time_cols <- colorRampPalette(brewer.pal(8, "Dark2"))(
+  length(unique(meta$timepoint))
+)
+names(time_cols) <- unique(meta$timepoint)
+
+plotMDS(
+  dge_filtered,
+  col = time_cols[meta$timepoint],
+  labels = meta$timepoint,
+  main = "MDS (colored by timepoint)"
+)
+
+legend(
+  "topright",
+  legend = names(time_cols),
+  col = time_cols,
+  pch = 16,
+  bty = "n"
+)
+```
+
+MDS 3 — colored by biological replicate (i0x)
+
+```{r}
+rep_cols <- brewer.pal(
+  length(unique(meta$replicate)),
+  "Set3"
+)
+names(rep_cols) <- unique(meta$replicate)
+
+plotMDS(
+  dge_filtered,
+  col = rep_cols[meta$replicate],
+  labels = meta$replicate,
+  main = "MDS (colored by biological replicate)"
+)
+
+legend(
+  "topright",
+  legend = names(rep_cols),
+  col = rep_cols,
+  pch = 16,
+  bty = "n"
+)
+```
+
+```{r}
+## ---- save-qc-objects ----
+
+saveRDS(
+  list(
+    dge_filtered = dge_filtered,
+    meta         = meta,
+    design       = design,
+    norm_cpm     = norm_cpm,
+    mappings     = gene_map
+  ),
+  file = "data/d1_qc_objects.rds"
+)
+```
