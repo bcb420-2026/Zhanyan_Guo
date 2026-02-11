@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<style xmlns="http://purl.org/net/xbiblio/csl"
+       version="1.0"
+       class="numeric"
+       default-locale="en-US">
+  <info>
+    <title>Nature</title>
+    <id>http://www.zotero.org/styles/nature</id>
+    <link href="http://www.zotero.org/styles/nature" rel="self"/>
+    <link href="https://www.nature.com/nature-research/editorial-policies/references"
+          rel="documentation"/>
+    <author>
+      <name>Nature Publishing Group</name>
+    </author>
+    <category citation-format="numeric"/>
+    <category field="science"/>
+    <updated>2019-10-10T04:49:00+00:00</updated>
+    <summary>Nature numeric style</summary>
+    <license href="http://creativecommons.org/licenses/by-sa/3.0/"/>
+  </info>
+
+  <macro name="author">
+    <names variable="author">
+      <name initialize-with="."
+            delimiter=", "
+            delimiter-precedes-last="always"/>
+      <label form="short" prefix=", "/>
+    </names>
+  </macro>
+
+  <macro name="title">
+    <text variable="title"/>
+  </macro>
+
+  <macro name="journal">
+    <text variable="container-title" font-style="italic"/>
+  </macro>
+
+  <macro name="year">
+    <date variable="issued">
+      <date-part name="year"/>
+    </date>
+  </macro>
+
+  <macro name="volume">
+    <text variable="volume" font-weight="bold"/>
+  </macro>
+
+  <macro name="pages">
+    <text variable="page"/>
+  </macro>
+
+  <citation collapse="citation-number">
+    <sort>
+      <key variable="citation-number"/>
+    </sort>
+    <layout prefix="[" suffix="]" delimiter=",">
+      <text variable="citation-number"/>
+    </layout>
+  </citation>
+
+  <bibliography entry-spacing="0"
+                second-field-align="flush">
+    <layout suffix=".">
+      <text variable="citation-number" suffix=". "/>
+      <group delimiter=" ">
+        <text macro="author"/>
+        <text macro="title" suffix="."/>
+        <group delimiter=" ">
+          <text macro="journal"/>
+          <text macro="volume"/>
+          <text macro="pages"/>
+          <text macro="year" prefix="(" suffix=")"/>
+        </group>
+      </group>
+    </layout>
+  </bibliography>
+
+</style>

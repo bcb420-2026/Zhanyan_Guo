@@ -1,7 +1,30 @@
 ---
-title: "R Notebook"
-output: html_notebook
+title: "Assignment 1 – RNA-seq Data Processing and Differential Expression"
+author: "Zhanyan Guo"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+bibliography: references.bib
+csl: nature.csl
 ---
+
+# 1. Dataset Selection and Biological Justification
+
+## 1.1 Brief introduction of GSE205677
+
+This study, *“Saturated Fat Impairs Circadian Transcriptomics through Histone Modification of Enhancers”*, investigates how acute lipid overload affects circadian gene expression in human skeletal muscle. Primary skeletal muscle myotubes were derived from biopsies of healthy men, synchronized to a common circadian phase, and exposed to the saturated fatty acid palmitate. Cells were sampled every six hours over a 42-hour period, and gene expression was measured using bulk RNA-sequencing.
+
+The dataset focuses on transcriptome-wide changes in circadian rhythmicity rather than disruption of core clock genes themselves. The authors show that palmitate exposure reprograms rhythmic gene expression and alters the cycling of histone H3 lysine 27 acetylation (H3K27ac), a chromatin mark associated with active enhancers. This provides a mechanistic link between lipid metabolism, epigenetic regulation, and circadian transcription in human skeletal muscle.
+
+This dataset is well suited for differential expression and exploratory circadian analysis due to its controlled experimental design, time-resolved sampling, and availability of raw gene-level RNA-seq count data.
+
+# 2. Data Cleaning and Gene Identifier Mapping
+
+## 2.1 Initial data inspection and quality assessment
+
+Include and install all dependency
 
 ```{r setup, include=FALSE}
 required_pkgs <- c(
@@ -20,6 +43,8 @@ for (pkg in required_pkgs) {
 }
 ```
 
+Downloading Datasets
+
 ```{r download-datasets}
 # Create data directory if it doesn't exist
 dir.create("data", showWarnings = FALSE)
@@ -36,7 +61,7 @@ if (!file.exists(file_205677)) {
 file.exists(file_205677)
 ```
 
-Data Created
+Data Created and inspect dimension
 
 ```{r inspect-raw-dataset}
 # Read raw count matrix (GSE205677)
@@ -70,6 +95,8 @@ data <- list(
 dim(data$data)
 ```
 
+Here the data was stored along with a list documenting process has been done to it.
+
 ```{r inspect-and-record-headers}
 # Inspect column headers
 head(colnames(data$data), 10)
@@ -87,6 +114,8 @@ data$processing <- c(
 data$processing
 ```
 
+Due to the data-set contains same cell line in different time points, we inspect the data structure further:
+
 ```{r define-conditions}
 # Extract sample names
 samples <- colnames(data$data)
@@ -97,6 +126,8 @@ condition <- ifelse(grepl("_PAL_", samples), "Treatment", "Control")
 table(condition)
 ```
 
+One can see this data set actually contains 5-7 sample per time x cell line x treatment
+
 ```{r extract-timepoints}
 # Extract time point (e.g. 12h, 18h, ...)
 timepoint <- sub(".*_([0-9]+h)_i[0-9]+$", "\\1", samples)
@@ -105,12 +136,16 @@ table(timepoint)
 table(condition, timepoint)
 ```
 
+Inspect library size overall.
+
 ```{r compute-overall-library-size}
 # Total reads per sample
 library_size <- colSums(data$data)
 
 summary(library_size)
 ```
+
+Inspect library size group by time and treatment
 
 ```{r build-sample-metadata}
 sample_info <- data.frame(
@@ -144,6 +179,14 @@ boxplot(
 )
 ```
 
+Figure 1. Library size distribution across condition and time point
+
+Boxplots show the total sequencing depth (library size) for each RNA-seq sample, grouped by treatment condition (CTL vs PAL) and circadian time point. Overall library sizes are comparable across conditions and time points, indicating no major systematic differences in sequencing depth prior to normalization.
+
+## 2.2 Gene identifier mapping to HUGO symbols
+
+Include ensembl at fix version 115 for reproducebilty. We restric it to hsapiens_gene_ensembl data.
+
 ```{r include ensembl}
 library(biomaRt)
 ensembl_version <- 115
@@ -153,6 +196,8 @@ ensembl <- useDataset(
   mart = ensembl
 )
 ```
+
+Preparation of ids by strip version suffix, inspect the stripped raw ID's:
 
 ```{r Prep ids}
 # Extract Ensembl gene IDs from count matrix
@@ -166,6 +211,8 @@ length(ensembl_ids_clean)
 head(ensembl_ids_clean)
 ```
 
+Create Mapping
+
 ```{r Mapping}
 gene_map <- getBM(
   attributes = c("ensembl_gene_id", "hgnc_symbol"),
@@ -178,6 +225,8 @@ dim(gene_map)
 head(gene_map)
 ```
 
+Cache mapping
+
 ```{r Cache mapping}
 cache_file <- "data/ensembl_to_hgnc_map.rds"
 
@@ -188,13 +237,17 @@ if (!file.exists(cache_file)) {
 }
 ```
 
-```{r handling mapping conflicts}
+## 2.3 Handling unmapped and duplicated identifiers
+
+Here possible conflicts is handled by the following rule:
+
+```{r Convert counts to data frame with gene IDs}
 # Convert counts to data frame with gene IDs
 counts_df <- as.data.frame(data$data)
 counts_df$ensembl_gene_id <- ensembl_ids_clean
 ```
 
-Ensembl IDs mapping to multiple symbols (ambiguous) These ids will be assigned na.
+1.  Ensembl IDs mapping to multiple symbols (ambiguous) These ids will be assigned na.
 
 ```{r}
 ambiguous_ensembl <- gene_map %>%
@@ -205,7 +258,9 @@ ambiguous_ensembl <- gene_map %>%
 ambiguous_ensembl
 ```
 
-2Multiple Ensembl IDs mapping to the same symbol These will be kept sperate but given same symbol.
+Here we see only 1 gene has mapped to 2 symbols.
+
+2.  Multiple Ensembl IDs mapping to the same symbol These will be kept sperate but given same symbol.
 
 ```{r}
 multi_ensembl_per_symbol <- gene_map %>%
@@ -216,6 +271,10 @@ multi_ensembl_per_symbol <- gene_map %>%
 
 multi_ensembl_per_symbol
 ```
+
+Here we see 1 symbol get mapped to 2 rows.
+
+Merge the annotation back to the data.
 
 ```{r Merge annotation}
 # Identify ambiguous Ensembl IDs
@@ -252,6 +311,8 @@ data$processing <- c(
 head(data$data[, 1:6])
 ```
 
+Check for number of duplication in annotation after annotation. This duplication is larger because it also counts for unmapped genes.
+
 ```{r check duplication}
 # total genes symbols
 table(!is.na(counts_annotated$hgnc_symbol))
@@ -260,11 +321,24 @@ table(!is.na(counts_annotated$hgnc_symbol))
 sum(duplicated(counts_annotated$hgnc_symbol, na.rm = TRUE))
 ```
 
-Given the robustness of downstream RNA-seq statistical methods to extreme values, no outlier removal was performed at this stage in the absence of independent evidence of technical failure.
+## 2.4 Outliners
 
-Pre normalization
+Given the robustness of downstream RNA-seq statistical methods to extreme values, no outliner removal was performed at this stage in the absence of independent evidence of technical failure.
+
+Here we name the rows by handle the hgnc symbol conflict by give it a version number and do a minimum 10 count in 10 samples cutoff:
 
 ```{r remove low count genes}
+# Prefer HGNC symbol, fall back to Ensembl if missing
+gene_label <- ifelse(
+  !is.na(data$data$hgnc_symbol) & data$data$hgnc_symbol != "",
+  data$data$hgnc_symbol,
+  data$data$ensembl_gene_id
+)
+
+gene_label_unique <- make.unique(gene_label)
+
+rownames(data$data) <- gene_label_unique
+
 # Identify count columns (exclude annotation)
 count_cols <- !(colnames(data$data) %in% c("ensembl_gene_id", "hgnc_symbol"))
 
@@ -281,6 +355,7 @@ table(keep_genes)
 # Filter the full data object (annotation + counts)
 data$data_filtered <- data$data[keep_genes, ]
 
+
 dim(data$data_filtered)
 
 data$processing <- c(
@@ -294,6 +369,12 @@ data$processing <- c(
 
 data$processing
 ```
+
+# 3. Quality Control and Normalization
+
+## 3.1 Sample metadata construction and experimental design
+
+we first plot the pre normalization distribution:
 
 Define plot functions:
 
@@ -358,12 +439,20 @@ inspect_timepoint_counts <- function(counts_by_tp) {
 
 ```
 
+Here we plot for each time point the distribution of raw counts.
+
 ```{r Inspection Results}
 counts_raw <- as.matrix(data$data[, -c(1, 2)])  
 samples <- colnames(counts_raw)
 counts_by_timepoint <- split_by_timepoint(counts_raw)
 inspect_timepoint_counts(counts_by_timepoint)
 ```
+
+Figure 2. Distribution of raw gene expression counts across time points
+
+Boxplots and density plots display the distribution of raw RNA-seq gene counts for samples grouped by circadian time point. Substantial variability in count distributions reflects differences in sequencing depth and library composition prior to normalization. The high proportion of low-count and zero-count genes motivates subsequent filtering and normalization steps.
+
+we extract design matrix from the naming rules:
 
 ```{r Extract desgin matrix from naming}
 ## ---- design-matrix-from-names ----
@@ -400,6 +489,8 @@ head(design)
 
 ```
 
+Also prepare matrix in TMM ready format:
+
 ```{r Normalization setup}
 ## ---- prepare-filtered-counts ----
 
@@ -413,6 +504,10 @@ storage.mode(counts_filtered) <- "integer"
 
 dim(counts_filtered)
 ```
+
+## 3.2 Low-count gene filtering with Design
+
+We further filtered with experiment design to see if any other QC can be done.
 
 ```{r filter-with-design}
 library(edgeR)
@@ -432,12 +527,18 @@ dge_filtered <- dge[keep, , keep.lib.sizes = FALSE]
 dim(dge_filtered)
 ```
 
+## 3.3 Normalization using TMM and CPM
+
+Run the normalization using TMM
+
 ```{r TMM normalization (design-aware)}
 
 dge_filtered <- calcNormFactors(dge_filtered, method = "TMM")
 
 dge_filtered$samples
 ```
+
+The CPM:
 
 ```{r Compute normalized CPM}
 
@@ -449,6 +550,8 @@ norm_cpm <- cpm(
 
 dim(norm_cpm)
 ```
+
+We use the same helper function defined before to inspect result:
 
 ```{r }
 ## ---- post-qc-timepoint-inspection-normalized ----
@@ -466,6 +569,14 @@ counts_by_timepoint <- split_by_timepoint(counts_norm)
 inspect_timepoint_counts(counts_by_timepoint)
 
 ```
+
+Figure 3. Distribution of normalized gene expression across time points
+
+Boxplots and density plots show the distribution of normalized expression values (CPM) for each circadian time point. Normalization reduces library size–driven differences and yields comparable expression distributions across samples and time points. The consistency of distributions indicates successful normalization and suggests that remaining variation reflects biological effects rather than technical artifacts.
+
+## 3.4 Exploratory MDS analysis
+
+The MDS plots in different grouping rules:
 
 ```{r set up MDS plotting}
 library(RColorBrewer)
@@ -503,6 +614,10 @@ legend(
 )
 ```
 
+Figure 4. Multidimensional scaling (MDS) plot colored by treatment
+
+Each point represents a sample positioned based on the leading log-fold-change distances of normalized gene expression. Samples are colored by treatment condition (PAL vs CTL). Separation along the primary dimensions indicates that palmitate treatment is a major source of transcriptomic variation.
+
 MDS 2 — colored by timepoint
 
 ```{r}
@@ -526,6 +641,10 @@ legend(
   bty = "n"
 )
 ```
+
+Figure 5. Multidimensional scaling (MDS) plot colored by time point
+
+Samples are colored according to circadian time point. Partial ordering along the MDS axes reflects temporal structure in gene expression, consistent with circadian regulation across the time course.
 
 MDS 3 — colored by biological replicate (i0x)
 
@@ -552,6 +671,12 @@ legend(
 )
 ```
 
+Figure 6. Multidimensional scaling (MDS) plot colored by biological replicate
+
+Samples are colored by biological replicate (i0x). Replicates do not form dominant clusters, indicating that replicate-to-replicate variability is smaller than treatment- or time-related effects.
+
+## 3.5 Store the Result
+
 ```{r}
 ## ---- save-qc-objects ----
 
@@ -566,3 +691,247 @@ saveRDS(
   file = "data/d1_qc_objects.rds"
 )
 ```
+
+# 4. Differential Expression Analysis
+
+## 4.1 Model design and contrast specification
+
+Our previous step showed the data has:
+
+1.  Primary separation: circadian timepoint
+2.  Secondary separation: palmitate treatment
+3.  Minor variation: biological replicate (i0x)
+
+In order to hypothessices: Palmitate causes a consistent shift in expression across all timepoints
+
+Use additive design: expression \~ timepoint + treatment.
+
+```{r load data}
+obj <- readRDS("data/d1_qc_objects.rds")
+
+dge <- obj$dge_filtered
+meta <- obj$meta
+mappings <- obj$mappings
+```
+
+Recreate design matrix and factors
+
+```{r}
+meta$timepoint <- factor(meta$timepoint)
+meta$treatment <- factor(meta$treatment, levels = c("CTL", "PAL"))
+design <- model.matrix(~ timepoint + treatment, data = meta)
+colnames(design)
+```
+
+## 4.2 edgeR quasi-likelihood testing
+
+Fit the model for calculate dffrential expression use edgeR **quasi-likelihood**
+
+The BCV plot:
+
+```{r fit and Plot Biological coefficient of variance plot}
+dge <- estimateDisp(dge, design)
+
+fit <- glmQLFit(dge, design)
+
+plotBCV(dge)
+```
+
+Figure X. Biological Coefficient of Variation (BCV) plot
+
+The BCV plot shows gene-wise biological variability as a function of average expression. Lowly expressed genes exhibit higher relative variability, while dispersion stabilizes for more highly expressed genes. The smooth trend indicates successful dispersion estimation, supporting the use of edgeR quasi-likelihood testing for differential expression analysis.
+
+Hypothesis testing
+
+```{r}
+qlf_pal_vs_ctl <- glmQLFTest(
+  fit,
+  coef = "treatmentPAL"
+)
+topTags(qlf_pal_vs_ctl)
+res_pal <- topTags(qlf_pal_vs_ctl, n = Inf)$table %>%
+  tibble::rownames_to_column("ensembl")
+
+```
+
+Reporting raw P value gives how many genes are significant beforen accounting multiple hypothesis.
+
+```{r P-value}
+sum(res_pal$PValue < 0.05)
+```
+
+P-values for differential expression were calculated for all genes using the edgeR quasi-likelihood framework, which models count variability using a negative binomial distribution and provides robust inference for RNA-seq data. Genes were considered significantly differentially expressed if they met a threshold of **raw p-value \< 0.05**, a commonly used criterion for initial significance screening in exploratory transcriptomic analyses.
+
+Using this threshold, **1,223 genes** were identified as significantly differentially expressed between palmitate-treated and control conditions. This unadjusted p-value cutoff was chosen to quantify the overall extent of transcriptional change prior to multiple-testing correction, which is addressed separately to control the false discovery rate.
+
+## 4.3 Multiple hypothesis correction
+
+Here we apply:
+
+p-value correction: Benjamini–Hochberg FDR
+
+This Controls false discovery rate under thousands of tests to encounter the multiple hypothesis factor.
+
+```{r significance}
+sig_res <- res_pal %>%
+  filter(FDR < 0.05, abs(logFC) >= 1)
+
+nrow(sig_res)
+```
+
+We use additional Effect size filter: \|log2FC\| ≥ 1 to exclude biologically trivial changes.
+
+The result gives 14 genes of interest that pass P value.
+
+Because thousands of genes were tested simultaneously, raw p-values were corrected to control for multiple hypothesis testing. We used the **Benjamini–Hochberg false discovery rate (FDR)** correction, as implemented by **edgeR**, which is the standard approach for RNA-seq differential expression analysis. FDR control is preferred over more conservative methods (e.g. Bonferroni) because it balances sensitivity and specificity by limiting the expected proportion of false positives among declared significant genes.
+
+Genes were considered significantly differentially expressed after correction if they satisfied both:
+
+-   **FDR \< 0.05**, and
+
+-   **\|log₂ fold change\| ≥ 1**, to ensure biological relevance in addition to statistical significance.
+
+Applying these criteria, **14 genes** passed multiple-testing correction and were identified as significantly differentially expressed between palmitate-treated and control conditions.
+
+## 4.4 volcano plot
+
+plot the volcano plot. Here since 14 gene selected, all are highlighted.
+
+```{r volcano plot}
+library(ggplot2)
+
+volcano_df <- res_pal %>%
+  mutate(
+    sig = FDR < 0.05 & abs(logFC) >= 1
+  )
+
+ggplot(volcano_df, aes(logFC, -log10(PValue))) +
+  geom_point(aes(color = sig), alpha = 0.6) +
+  scale_color_manual(values = c("grey70", "red")) +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  theme_minimal() +
+  labs(
+    title = "edgeR QL: Palmitate vs Control",
+    x = "log2 fold-change",
+    y = "-log10(p-value)"
+  )
+
+```
+
+```{r}
+map_df <- mappings %>%
+  transmute(
+    ensembl = as.character(ensembl_gene_id),
+    symbol  = as.character(hgnc_symbol)
+  ) %>%
+  distinct(ensembl, .keep_all = TRUE)
+
+sig_res_annot <- sig_res %>%
+  left_join(map_df, by = c("ensembl" = "ensembl")) %>%
+  mutate(label = ifelse(is.na(symbol) | symbol == "", ensembl, symbol))
+```
+
+**Figure 9.** Volcano plot showing differential gene expression between palmitate-treated (PAL) and control (CTL) skeletal muscle myotubes. Each point represents a gene, plotted by log2 fold change (logFC) on the x-axis and −log10(p-value) on the y-axis. Genes passing multiple-testing correction (FDR \< 0.05) are highlighted. Vertical dashed lines indicate \|logFC\| = 1, and the horizontal dashed line marks the nominal p-value threshold (p = 0.05). This plot summarizes both the magnitude and statistical significance of differential expression following palmitate exposure.
+
+## 4.5 Heatmap of significant genes
+
+Plot the heatmap:
+
+```{r}
+logcpm <- cpm(dge, log = TRUE, prior.count = 1)
+
+hm <- logcpm[sig_res_annot$ensembl, ]
+rownames(hm) <- make.unique(sig_res_annot$label)
+
+hm_z <- t(scale(t(hm)))
+```
+
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+
+ha <- HeatmapAnnotation(
+  treatment = meta$treatment,
+  timepoint = meta$timepoint
+)
+
+Heatmap(
+  hm_z,
+  name = "Z-score",
+  top_annotation = ha,
+  col = colorRamp2(c(-2, 0, 2), c("blue", "white", "red")),
+  show_row_names = TRUE,
+  row_names_gp = grid::gpar(fontsize = 8),
+  show_column_names = FALSE,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  row_title = "Significant genes (PAL vs CTL)"
+)
+```
+
+**Figure 10.** Heatmap of genes significantly differentially expressed between palmitate-treated (PAL) and control (CTL) samples (FDR \< 0.05, \|logFC\| ≥ 1). Expression values are shown as row-wise z-scores of log-transformed CPM values to emphasize relative expression patterns across samples. Rows correspond to genes and columns to individual samples. Samples are annotated by treatment condition and time point. Hierarchical clustering was applied to both genes and samples. Despite the presence of multiple circadian time points, palmitate-treated samples largely cluster together, indicating that treatment effects dominate over time-dependent variation, with limited overlap between conditions.
+
+A heatmap of the significantly differentially expressed genes (FDR \< 0.05, \|log₂FC\| ≥ 1) was generated using row-wise z-scored normalized expression values. Hierarchical clustering was applied to both genes and samples.
+
+Despite the presence of **multiple time points**, which introduce an additional source of biological variation, samples largely **cluster according to treatment status**. Palmitate-treated samples tend to group together and are separated from control samples, indicating that lipid exposure induces a consistent transcriptional response across time.
+
+A small number of samples show partial mixing between treatment and control clusters. This is expected given the strong **circadian structure of the dataset**, where time point effects can partially overlap with treatment-driven expression patterns. Nonetheless, the dominant clustering by treatment suggests that the palmitate effect is robust and detectable even in the presence of temporal variation.
+
+Overall, the heatmap supports the differential expression results by showing coherent treatment-associated expression patterns, while also reflecting the complex, time-dependent nature of circadian transcriptomic data.
+
+## 5. Discussion and dataset characteristics
+
+### Why is the dataset of interest to you?
+
+This dataset is of interest because it directly investigates how **acute lipid overload (palmitate exposure)** alters **circadian gene expression** in human skeletal muscle cells. Circadian regulation is tightly linked to metabolic health, and understanding how saturated fatty acids perturb rhythmic transcription provides mechanistic insight into metabolic dysregulation associated with obesity and insulin resistance. The dataset combines a controlled experimental perturbation with dense temporal sampling, making it well suited for transcriptomic analysis.
+
+### What are the control and test conditions of the dataset?
+
+The dataset contains two primary experimental conditions:
+
+-   **Control (CTL):** primary human skeletal muscle myotubes cultured under standard conditions.
+
+-   **Treatment (PAL):** matched myotube cultures exposed to the saturated fatty acid palmitate.
+
+Both conditions were sampled across multiple circadian time points following synchronization.
+
+### How many samples are in each condition?
+
+The dataset consists of **105 samples in total**, all derived from individuals with normal glucose tolerance (NGT):
+
+-   **Control (NGT_CTL):** samples collected at multiple time points across biological replicates.
+
+    **Treatment (NGT_PAL):** samples collected at the same set of time points and replicates.
+
+Exact sample counts per condition and time point were verified directly from sample metadata and column name parsing during data inspection. However, one replicate was measured multiple time points, by grouping them in each time point, we can see 5-7 samples per timepoint.
+
+### Were there expression values that were not unique for specific genes? How were these handled?
+
+Yes. Multiple rows mapped to the same **HGNC gene symbol**, reflecting duplicated Ensembl gene IDs, transcript variants, or historical annotation artifacts. To handle this:
+
+-   HGNC symbols were used as the primary gene identifiers.
+
+-   When multiple rows mapped to the same symbol, **unique row names were generated by appending an index**, preserving all expression measurements while avoiding row name conflicts.
+
+-   No expression values were averaged or discarded at this stage to avoid introducing bias.
+
+### Were there expression values that could not be mapped to current HUGO symbols?
+
+Yes. A small subset of Ensembl gene IDs could not be mapped to current HGNC symbols, likely due to deprecated identifiers, non-coding RNAs, or outdated annotations. These genes were **retained using their Ensembl IDs** as fallback identifiers to preserve expression information and maintain reproducibility.
+
+### Were there any outliers in the dataset? How were they handled?
+
+No samples were removed as outliers in this analysis. Exploratory quality control (library size distributions, boxplots, density plots, and MDS plots) did not reveal samples with aberrant behavior indicative of technical failure. The originating study does not report explicit sample removal. Given the use of **robust statistical methods (edgeR quasi-likelihood framework)**, no manual outlier removal was performed.
+
+### How did you handle replicates?
+
+Biological replicates were retained as independent samples throughout the analysis. Replicate structure was encoded in the design matrix and accounted for during normalization and differential expression modeling. No technical replicates were collapsed, allowing edgeR to properly estimate biological variability.
+
+### What is the final coverage of your dataset?
+
+After low-count gene filtering and annotation:
+
+-   The dataset retained **the vast majority of expressed genes**, with lowly expressed features removed using a minimum count and minimum sample threshold.
+
+-   Differential expression analysis identified **1,223 genes with nominal p-values \< 0.05**, and **14 genes passing multiple hypothesis correction (FDR \< 0.05, \|log₂FC\| ≥ 1)**.
