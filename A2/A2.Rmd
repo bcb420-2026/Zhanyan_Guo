@@ -1,0 +1,249 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r load, include=FALSE}
+required_pkgs <- c(
+  "DBI",
+  "RSQLite",
+  "biomaRt",
+  "dplyr",
+  "edgeR",
+  "gprofiler2",
+  "GSA"
+)
+
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
+```
+This is part of the same process as A1.4 for we stored the data before hypothesis testing.
+```{r reload-datasets}
+## ---- load-a1-objects ----
+
+obj <- readRDS("data/d1_qc_objects.rds")
+
+dge  <- obj$dge_filtered
+meta <- obj$meta
+mappings <- obj$mappings
+```
+Recreate design matrix
+```{r recreate design}
+## ---- recreate-design ----
+
+meta$timepoint <- factor(meta$timepoint)
+meta$treatment <- factor(meta$treatment, levels = c("CTL", "PAL"))
+
+design <- model.matrix(~ timepoint + treatment, data = meta)
+
+colnames(design)
+```
+Re-estimate dispersion and fit QL model
+```{r refit QL}
+## ---- fit-edger-model ----
+
+dge <- estimateDisp(dge, design)
+
+fit <- glmQLFit(dge, design)
+```
+Verify if its working as before:
+``` {r BCV}
+plotBCV(dge)
+```
+Hypoothesis testing
+```{r ql-test}
+## ---- ql-test ----
+
+qlf_pal_vs_ctl <- glmQLFTest(
+  fit,
+  coef = "treatmentPAL"
+)
+
+res_pal <- topTags(qlf_pal_vs_ctl, n = Inf)$table %>%
+  tibble::rownames_to_column("ensembl")
+```
+Verify same number as before:
+```{r }
+sum(res_pal$PValue < 0.05)
+```
+```{r}
+sig_res <- res_pal %>%
+  filter(FDR < 0.05, abs(logFC) >= 1)
+
+nrow(sig_res)
+```
+Split into up and down:
+```{r}
+sig_up <- sig_res %>% filter(logFC > 0)
+sig_down <- sig_res %>% filter(logFC < 0)
+
+nrow(sig_up)
+nrow(sig_down)
+```
+
+1.1 Method Choice
+Method: Thresholded Over-Representation Analysis (ORA)
+
+We use:
+
+g:Profiler (gprofiler2 R package)
+
+Hypergeometric test
+
+Benjamini–Hochberg FDR correction
+
+Why this method?
+
+We already defined significant genes using FDR < 0.05 and |logFC| ≥ 1.
+
+ORA is appropriate when using a pre-thresholded gene list.
+
+It tests whether gene sets are enriched beyond random expectation.
+
+This is NOT GSEA (ranked analysis). This is classic ORA.
+
+We use g:Profiler built-in annotation sources:
+``` {r Sources}
+gprofsources = c("GO:BP", "REAC", "WP")
+```
+
+Enrichment analysis was performed using g:Profiler (version X.X) with Homo sapiens annotation databases including GO (BP, MF, CC), Reactome, WikiPathways, KEGG, transcription factor targets, microRNA targets, CORUM complexes, Human Protein Atlas, and Human Phenotype Ontology.
+
+Annotation version
+```{r Report Version}
+get_version_info(organism = "hsapiens")
+```
+```{r inspect gene lists}
+head(sig_up)
+```
+```{r Create gene symbel only list}
+genes_up   <- unique(sig_up$ensembl)
+genes_down <- unique(sig_down$ensembl)
+genes_all  <- unique(sig_res$ensembl)
+
+length(genes_up)
+length(genes_down)
+```
+Upregulated
+```{r up}
+gost_up <- gost(
+  query = genes_up,
+  organism = "hsapiens",
+  significant = FALSE,
+  ordered_query = FALSE,
+  exclude_iea = TRUE,
+  correction_method = "fdr",
+  sources = gprofsources
+)
+
+res_up <- gost_up$result
+```
+Down
+```{r down}
+gost_down <- gost(
+  query = genes_down,
+  organism = "hsapiens",
+  significant = FALSE,
+  ordered_query = FALSE,
+  exclude_iea = TRUE,
+  correction_method = "fdr",
+  sources = gprofsources
+)
+
+res_down <- gost_down$result
+```
+Combined
+```{r all}
+gost_all <- gost(
+  query = genes_all,
+  organism = "hsapiens",
+  significant = FALSE,
+  ordered_query = FALSE,
+  exclude_iea = TRUE,
+  correction_method = "fdr",
+  sources = gprofsources
+)
+
+res_all <- gost_all$result
+```
+We performed thresholded over-representation analysis (ORA) using the gprofiler2::gost() function with the following parameters:
+
+🔹 query = genes_up / genes_down / genes_all
+
+The query represents the list of significantly differentially expressed genes identified from edgeR analysis (FDR < 0.05 and |log2FC| ≥ 1).
+Up-regulated, down-regulated, and combined gene sets were analyzed separately to preserve biological directionality.
+
+🔹 organism = "hsapiens"
+
+The organism parameter specifies that Homo sapiens annotation databases were used for enrichment analysis.
+
+significant = FALSE
+
+We set significant = FALSE to retrieve all enrichment results rather than restricting output to only those passing g:Profiler’s internal significance threshold.
+This allows us to apply our own filtering criteria downstream.
+
+ordered_query = FALSE
+
+Because this analysis is thresholded ORA (not ranked GSEA), genes were treated as an unranked set.
+Therefore, ordered_query = FALSE was appropriate.
+
+exclude_iea = TRUE
+
+Inferred Electronic Annotations (IEA) were excluded to increase annotation reliability by limiting enrichment to manually curated or experimentally supported terms.
+
+correction_method = "fdr"
+
+Multiple hypothesis correction was performed using the Benjamini–Hochberg False Discovery Rate (FDR) method to control for false positives across many tested gene sets.
+
+sources = gprofsources
+
+The following annotation databases were included:
+
+GO:BP (Biological Process)
+
+GO:MF (Molecular Function)
+
+GO:CC (Cellular Component)
+
+REAC (Reactome pathways)
+
+WP (WikiPathways)
+
+KEGG
+
+TF (Transcription factor targets)
+
+MIRNA (miRNA target sets)
+
+CORUM (protein complexes)
+
+HPA (Human Protein Atlas)
+
+HP (Human Phenotype Ontology)
+
+Including multiple annotation sources allows interrogation of biological processes, pathways, regulatory networks, and disease associations.
+
+Size filtered Results
+``` {r filter size}
+min_gs_size <- 3
+max_gs_size <- 250
+min_intersection <- 2
+
+res_up_f <- subset(res_up,
+                   term_size >= min_gs_size &
+                   term_size <= max_gs_size &
+                   intersection_size >= min_intersection)
+
+res_down_f <- subset(res_down,
+                     term_size >= min_gs_size &
+                     term_size <= max_gs_size &
+                     intersection_size >= min_intersection)
+
+res_all_f <- subset(res_all,
+                    term_size >= min_gs_size &
+                    term_size <= max_gs_size &
+                    intersection_size >= min_intersection)
+```
