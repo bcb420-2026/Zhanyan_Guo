@@ -237,13 +237,98 @@ res_up_f <- subset(res_up,
                    term_size <= max_gs_size &
                    intersection_size >= min_intersection)
 
-res_down_f <- subset(res_down,
-                     term_size >= min_gs_size &
-                     term_size <= max_gs_size &
-                     intersection_size >= min_intersection)
-
 res_all_f <- subset(res_all,
                     term_size >= min_gs_size &
                     term_size <= max_gs_size &
                     intersection_size >= min_intersection)
+```
+
+Part 2 Unthrreshold
+set output location:
+```{r output location}
+working_dir <- "./data"
+```
+create ranked gene list
+```{r ranked gene list}
+library(dplyr)
+
+# Create ranked table
+res_rank <- res_pal %>%
+  mutate(rank_score = sign(logFC) * -log10(PValue)) %>%
+  arrange(desc(rank_score))
+
+# Keep only required columns
+rnk_df <- res_rank %>%
+  select(ensembl, rank_score)
+
+# Define file path
+working_dir <- "./data"
+dir.create(working_dir, showWarnings = FALSE)
+
+rnk_file <- "PAL_vs_CTL_ranked.rnk"
+rnk_path <- file.path(working_dir, rnk_file)
+
+# Write .rnk file
+write.table(
+  rnk_df,
+  file = rnk_path,
+  sep = "\t",
+  row.names = FALSE,
+  col.names = FALSE,
+  quote = FALSE
+)
+```
+
+Download fixed version fir GMT from baderlab
+```{r download GMT}
+library(RCurl)
+
+output_dir <- "./generated_data/gsea"
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+gmt_url  <- "https://download.baderlab.org/EM_Genesets/September_01_2025/Human/symbol/Human_GOBP_AllPathways_noPFOCR_no_GO_iea_September_01_2025_symbol.gmt"
+
+gmt_file <- "Human_GOBP_AllPathways_noPFOCR_no_GO_iea_September_01_2025_symbol.gmt"
+gmt_path <- file.path(output_dir, gmt_file)
+
+if (!file.exists(gmt_path)) {
+  download.file(gmt_url, destfile = gmt_path, mode = "wb")
+}
+```
+September 01, 2025
+GO BP + Pathways
+No IEA
+Human symbols
+
+Configure GSEA CLI
+```{r }
+gsea_jar <- path.expand("~/GSEA_4.4.0/gsea-cli.sh")
+```
+
+Run:
+```{r run GSEA}
+analysis_name <- "PAL_vs_CTL"
+
+gsea_stdout <- file.path(output_dir, "gsea_output.txt")
+
+command <- paste(
+  shQuote(gsea_jar),
+  "GSEAPreRanked",
+  "-gmx", shQuote(gmt_path),
+  "-rnk", shQuote(rnk_path),
+  "-collapse false",
+  "-nperm 1000",
+  "-scoring_scheme weighted",
+  "-rpt_label", shQuote(analysis_name),
+  "-plot_top_x 20",
+  "-rnd_seed 12345",
+  "-set_max 200",
+  "-set_min 15",
+  "-zip_report false",
+  "-out", shQuote(output_dir),
+  ">", shQuote(gsea_stdout)
+)
+
+cat("Running command:\n", command, "\n")
+system(command)
 ```
