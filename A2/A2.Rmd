@@ -10,7 +10,10 @@ required_pkgs <- c(
   "dplyr",
   "edgeR",
   "gprofiler2",
-  "GSA"
+  "GSA",
+  "BiocManager",
+  "RCy3",
+  "httr"
 )
 
 for (pkg in required_pkgs) {
@@ -332,3 +335,18 @@ command <- paste(
 cat("Running command:\n", command, "\n")
 system(command)
 ```
+Gene sets were restricted to sizes between 15 and 200 genes to exclude very small unstable sets and overly broad non-specific categories, following recommended GSEA and EnrichmentMap guidelines.
+
+Cytoscape Docker Connection:
+```{r Cytoscape connection}
+is_docker <- TRUE
+if(is_docker){
+  current_base = "host.docker.internal:8787/v1"
+  .defaultBaseUrl <- "http://host.docker.internal:8787/v1"
+} else{
+  current_base = "localhost:8787/v1"
+}
+
+cytoscapePing (base.url = current_base)
+```
+
