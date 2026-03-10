@@ -1,10 +1,23 @@
 ---
-title: "R Notebook"
-output: html_notebook
-editor_options: 
-  markdown: 
-    wrap: 72
+title: "BCB420 Pathway Enrichment Analysis"
+author: "Zhanyan Guo"
+date: "`r Sys.Date()`"
+
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+
+bibliography: references.bib
+csl: apa.csl
 ---
+
+# 0 Introduction
+
+This analysis investigates transcriptional responses to **palmitate treatment**, with a particular focus on identifying biological pathways associated with lipid metabolism and potential circadian regulation. The dataset analyzed in this report originates from the study *Saturated Fat Impairs Circadian Transcriptomics through Histone Modification of Enhancers [@Pillon2021.02.23.432336]*. In the original study, palmitate treatment was shown to alter metabolic pathways while disrupting circadian rhythmicity in skeletal muscle cells.
+
+Raw gene expression data were obtained from the **Gene Expression Omnibus (GEO)** database and processed using the **edgeR** differential expression analysis framework. The analysis pipeline followed standard RNA-seq normalization and statistical modeling procedures. Gene counts were first normalized to account for library size differences using **trimmed mean of M-values (TMM) normalization**, which corrects for compositional bias across samples. After normalization, dispersion parameters were estimated to model biological variability between samples.
 
 ```{r load, include=FALSE}
 required_pkgs <- c(
@@ -30,8 +43,7 @@ for (pkg in required_pkgs) {
 }
 ```
 
-This is part of the same process as A1.4 for we stored the data before
-hypothesis testing.
+Here we demonstrate the steps for reinspect the data. hypothesis testing.
 
 ```{r reload-datasets}
 ## ---- load-a1-objects ----
@@ -45,6 +57,8 @@ mappings <- obj$mappings
 
 Recreate design matrix
 
+To account for the experimental design, a generalized linear model was constructed including both **timepoint** and **treatment** variables. The design matrix included multiple sampling timepoints and a binary variable representing palmitate treatment:
+
 ```{r recreate design}
 ## ---- recreate-design ----
 
@@ -53,6 +67,8 @@ meta$treatment <- factor(meta$treatment, levels = c("CTL", "PAL"))
 
 design <- model.matrix(~ timepoint + treatment, data = meta)
 ```
+
+This model structure allowed us to isolate the transcriptional effect of palmitate treatment while controlling for temporal variation.
 
 Re-estimate dispersion and fit QL model
 
@@ -64,13 +80,15 @@ dge <- estimateDisp(dge, design)
 fit <- glmQLFit(dge, design)
 ```
 
-Verify if its working as before:
+Plotting BCV:
 
 ```{r BCV}
 plotBCV(dge)
 ```
 
-Hypoothesis testing
+Figure 1. BCV graph from the last analysis, Plotting using the normalized data using timepoint + treatment design.
+
+Hypothesis testing
 
 ```{r ql-test}
 ## ---- ql-test ----
@@ -84,11 +102,15 @@ res_pal <- topTags(qlf_pal_vs_ctl, n = Inf)$table %>%
   tibble::rownames_to_column("ensembl")
 ```
 
-Verify same number as before:
+Verify same number of gene as the last analysis:
 
-```{r }
+Using P value cutoff, there are 1223 genes that are differentially expressed:
+
+```{r}
 sum(res_pal$PValue < 0.05)
 ```
+
+Using FDR cutoff, there are 14 genes that are differentially expressed
 
 ```{r}
 sig_res <- res_pal %>%
@@ -97,7 +119,31 @@ sig_res <- res_pal %>%
 nrow(sig_res)
 ```
 
-Split into up and down:
+Dispersion estimates were obtained using edgeR, and a **quasi-likelihood (QL) negative binomial model** was fitted to the data. The biological coefficient of variation (BCV) was inspected to confirm appropriate dispersion estimation and to assess variability across genes.
+
+Differential expression testing was then performed using quasi-likelihood F-tests. The results revealed:
+
+-    **1223 genes** with nominal significance at **p \< 0.05**
+
+-    **14 genes** that remained significant after **false discovery rate (FDR) correction**
+
+These results indicate that while many genes show moderate expression changes under palmitate treatment, relatively few genes pass stringent multiple-testing correction thresholds. This pattern suggests that coordinated but modest expression changes across groups of genes may play an important biological role.
+
+To capture these broader biological signals, pathway-level analyses were performed using two complementary approaches:
+
+1.   **Thresholded Over-Representation Analysis (ORA)** using significantly differentially expressed genes.
+
+2.   **Non-thresholded Gene Set Enrichment Analysis (GSEA)** using a ranked list of all genes.
+
+Together, these approaches allow identification of biological pathways that are over-represented among strongly differentially expressed genes as well as pathways showing coordinated expression changes across the entire transcriptome.
+
+The following sections describe the pathway enrichment analyses and their visualization using Cytoscape enrichment maps.
+
+# 1 Threshold Over-Representation
+
+## 1.1 Perform ORA
+
+In order to perform threshold ORA, we split the genes meeting 0.05 FDR cutoff to up and down group by the sign of the fold change. The result shows 11 genes where in up group and only 3 in the down regulated group.
 
 ```{r}
 sig_up <- sig_res %>% filter(logFC > 0)
@@ -107,36 +153,13 @@ nrow(sig_up)
 nrow(sig_down)
 ```
 
-1.1 Method Choice Method: Thresholded Over-Representation Analysis (ORA)
-
-We use:
-
-g:Profiler (gprofiler2 R package)
-
-Hypergeometric test
-
-Benjamini–Hochberg FDR correction
-
-Why this method?
-
-We already defined significant genes using FDR \< 0.05 and \|logFC\| ≥
-1.
-
-ORA is appropriate when using a pre-thresholded gene list.
-
-It tests whether gene sets are enriched beyond random expectation.
-
-We use g:Profiler built-in annotation sources:
+Here we present the steps to perform Threshold ORA:
 
 ```{r Sources}
 gprofsources = c("GO:BP", "REAC", "WP")
 ```
 
-Enrichment analysis was performed using g:Profiler (version 2025-03-16)
-with Homo sapiens annotation databases including GO (BP, MF, CC),
-Reactome, WikiPathways, KEGG, transcription factor targets, microRNA
-targets, CORUM complexes, Human Protein Atlas, and Human Phenotype
-Ontology.
+Enrichment analysis was performed using g:Profiler (version 2025-03-16) with Homo sapiens annotation databases including GO (BP, MF, CC), Reactome, WikiPathways, KEGG, transcription factor targets, microRNA targets, CORUM complexes, Human Protein Atlas, and Human Phenotype Ontology.
 
 Annotation version
 
@@ -209,45 +232,31 @@ gost_all <- gost(
 res_all <- gost_all$result
 ```
 
-We performed thresholded over-representation analysis (ORA) using the
-gprofiler2::gost() function with the following parameters:
+We performed thresholded over-representation analysis (ORA) using the gprofiler2::gost() function with the following parameters:
 
 query = genes_up / genes_down / genes_all
 
-The query represents the list of significantly differentially expressed
-genes identified from edgeR analysis (FDR \< 0.05 and \|log2FC\| ≥ 1).
-Up-regulated, down-regulated, and combined gene sets were analyzed
-separately to preserve biological directionality.
+The query represents the list of significantly differentially expressed genes identified from edgeR analysis (FDR \< 0.05 and \|log2FC\| ≥ 1). Up-regulated, down-regulated, and combined gene sets were analyzed separately to preserve biological directionality.
 
 organism = "hsapiens"
 
-The organism parameter specifies that Homo sapiens annotation databases
-were used for enrichment analysis.
+The organism parameter specifies that Homo sapiens annotation databases were used for enrichment analysis.
 
 significant = FALSE
 
-We set significant = FALSE to retrieve all enrichment results rather
-than restricting output to only those passing g:Profiler’s internal
-significance threshold. This allows us to apply our own filtering
-criteria downstream.
+We set significant = FALSE to retrieve all enrichment results rather than restricting output to only those passing g:Profiler’s internal significance threshold. This allows us to apply our own filtering criteria downstream.
 
 ordered_query = FALSE
 
-Because this analysis is thresholded ORA (not ranked GSEA), genes were
-treated as an unranked set. Therefore, ordered_query = FALSE was
-appropriate.
+Because this analysis is thresholded ORA (not ranked GSEA), genes were treated as an unranked set. Therefore, ordered_query = FALSE was appropriate.
 
 exclude_iea = TRUE
 
-Inferred Electronic Annotations (IEA) were excluded to increase
-annotation reliability by limiting enrichment to manually curated or
-experimentally supported terms.
+Inferred Electronic Annotations (IEA) were excluded to increase annotation reliability by limiting enrichment to manually curated or experimentally supported terms.
 
 correction_method = "fdr"
 
-Multiple hypothesis correction was performed using the
-Benjamini–Hochberg False Discovery Rate (FDR) method to control for
-false positives across many tested gene sets.
+Multiple hypothesis correction was performed using the Benjamini–Hochberg False Discovery Rate (FDR) method to control for false positives across many tested gene sets.
 
 sources = gprofsources
 
@@ -275,42 +284,43 @@ HPA (Human Protein Atlas)
 
 HP (Human Phenotype Ontology)
 
-Including multiple annotation sources allows interrogation of biological
-processes, pathways, regulatory networks, and disease associations.
+Including multiple annotation sources allows interrogation of biological processes, pathways, regulatory networks, and disease associations.
 
-Analysis:
+## 1.2 Biological expectation based on the original study
 
-The orginal paper applies RAIN algorithm for seperating cirardian genes
-from other effected genes as lipid intake alters well studied pathway
-such as lipid intake. Here we see if a bulk enrichment non theresholded
-ora can identify cirardian genes alone with lipid intake.
+The original study used the **RAIN algorithm** to identify genes exhibiting circadian rhythmicity and to determine how palmitate treatment affects rhythmic gene expression. The authors reported that palmitate treatment primarily altered the **rhythmic cycling behavior of genes**, while having minimal effects on the **overall expression levels of core circadian clock components**.
 
-1.  Identify the biological expectation from the paper
+In contrast, genes whose overall expression levels changed after palmitate exposure were strongly associated with **lipid metabolic pathways**.
 
-From the paragraph:
+Specifically, the paper states that:
 
-“Palmitate-responsive genes were associated with gene ontology pathways
-related to lipid metabolism (Figure 1E).”
+> “Palmitate-responsive genes were associated with gene ontology pathways related to lipid metabolism.”
 
-So the expected pathways include things like:
+Based on this observation, we expect enrichment analysis of differentially expressed genes to identify pathways related to lipid metabolism.
 
-Typical lipid-related GO BP terms:
+Typical Gene Ontology Biological Process terms associated with lipid metabolism include:
 
-lipid metabolic process
+-   lipid metabolic process
 
-fatty acid metabolic process
+-   fatty acid metabolic process
 
-fatty acid beta oxidation
+-   fatty acid beta-oxidation
 
-lipid biosynthetic process
+-   lipid biosynthetic process
 
-sterol metabolic process
+-   sterol metabolic process
 
-lipid transport
+-   lipid transport
 
-These become your benchmark.
+These pathways serve as biological benchmarks for evaluating the enrichment analysis results.
 
-If ORA finds these → result is relevant.
+If the ORA analysis identifies these lipid-related pathways as significantly enriched, it would indicate that the pathway analysis successfully captures the biological processes described in the original study.
+
+## 1.3 Result Analysis
+
+Here we present the steps to create summery of the result:
+
+Group by biological themes
 
 ```{r keyword rules}
 classify_theme <- function(df) {
@@ -329,6 +339,8 @@ classify_theme <- function(df) {
 res_up_theme   <- classify_theme(res_up)
 res_all_theme  <- classify_theme(res_all)
 ```
+
+Count numbers of gene set of each theme
 
 ```{r count}
 count_theme <- function(df, label) {
@@ -355,6 +367,8 @@ threshold_summary <- threshold_summary %>%
   complete(group = groups, theme = themes, fill = list(count = 0))
 ```
 
+Plotting the summery
+
 ```{r plot}
 library(ggplot2)
 
@@ -369,8 +383,7 @@ ggplot(threshold_summary, aes(x = group, y = count, fill = theme)) +
   )
 ```
 
-figure.x Summery of gene set counts for up regulated genesets, down
-regulated genesets and both gene sets combined.
+Figure.2 Summery of gene set counts for up regulated genesets, down regulated genesets and both gene sets combined.
 
 ```{r table of top term}
 get_top_terms <- function(df, group_name) {
@@ -403,16 +416,15 @@ knitr::kable(
 )
 ```
 
-Table x. Summery of top term and significant level for each theme.
+Table 1. Summery of top term and significant level for each theme.
 
-Interpertation: the g:profiling by fdr cutoff o.o5 did not identify any
-significant circardian gene set, but identified 53 lipid metabolism
-related geneset and 579 other geneset in using the positive experssed
-gene list. Using both positive and negative gene together did not effect
-the results as no significant gene set for 3 negative regulated gene
-added. see table x, figure x
+Interpertation: the g:profiling by fdr cutoff o.o5 did not identify any significant circardian gene set, but identified 53 lipid metabolism related geneset and 579 other geneset in using the positive experssed gene list.
 
-Size filtered Results reusing similar code
+## 1.4 Comparison of up-regulated, down-regulated, and combined gene sets
+
+Using both positive and negative gene together did not effect the results as no significant gene set for 3 negative regulated gene added. see table 1, figure 2.
+
+We performed size filtered results reusing similar code, the size cutoff is 3\< size \< 250 to remove any large general pathways.
 
 ```{r filter size}
 min_gs_size <- 3
@@ -488,27 +500,27 @@ knitr::kable(
 )
 ```
 
-Table Y. Top term anhd count for each theme after filtering geneset size
-3\<size\<200.
+Table 2. Top term anhd count for each theme after filtering geneset size 3\<size\<200.
 
-The result shows less lipid metabolism for less general pathways after
-filtering with a smaller total gene. Ther are 8 for lipid metabolism, 52
-for other and still 0 for circardian genes.
+### Interpretation of Filtered ORA Results
 
-In the paper it was conclued as large fraction of cycling genes stops
-cycling after palmitate treatment, whle only influenced the number of
-rhythmic genes, with minimal effect on expression of clock machenery
-components. By stopping cyclic behavior but maintain a similar
-experssion level, it aligns with our result of the insignificant of the
-cyclic genes' diffrenetial expression.
+After filtering gene sets by size and intersection criteria, the number of lipid metabolism–related pathways decreased compared to the unfiltered results. This filtering step removes very small gene sets and overly broad categories, resulting in a more specific set of enriched pathways. In the filtered results, **8 pathways were associated with lipid metabolism**, **52 pathways were categorized as other biological processes**, and **no circadian-related pathways were identified**.
 
-Part 2 Unthrreshold set output location:
+These results are consistent with the conclusions of the original study. The authors reported that palmitate treatment alters **circadian rhythmicity** rather than the overall **expression levels of core circadian clock genes**. Specifically, a large fraction of genes that normally exhibit circadian oscillations lose their rhythmic cycling after palmitate treatment. However, the expression levels of core clock machinery components remain largely unchanged.
+
+Because over-representation analysis (ORA) relies on **differentially expressed genes**, pathways associated with circadian regulation may not appear enriched if the genes involved maintain similar average expression levels despite losing their rhythmic behavior. In other words, the disruption occurs at the level of **temporal gene expression patterns rather than changes in overall expression abundance**.
+
+Therefore, the absence of circadian gene sets in the ORA results is consistent with the biological mechanism described in the paper. The enrichment of lipid metabolism pathways further supports the known metabolic effects of palmitate treatment on skeletal muscle cells.
+
+# 2 Non-Threshold Enrichment Analysis
+
+Here we demonstrate the steps for performing Non-Threshold Enrichment Analysis using GSEA
 
 ```{r output location}
 working_dir <- "./data"
 ```
 
-create ranked gene list
+create ranked gene list from previous analysis
 
 ```{r ranked gene list}
 library(dplyr)
@@ -540,7 +552,7 @@ write.table(
 )
 ```
 
-Download fixed version fir GMT from baderlab
+Download fixed version fir GMT from Baderlab
 
 ```{r download GMT}
 library(RCurl)
@@ -568,7 +580,7 @@ gsea_jar <- path.expand("~/GSEA_4.4.0/gsea-cli.sh")
 
 Run:
 
-```{r run GSEA}
+```{r run GSEA, eval = FALSE}
 analysis_name <- "PAL_vs_CTL"
 
 gsea_stdout <- file.path(output_dir, "gsea_output.txt")
@@ -595,88 +607,276 @@ cat("Running command:\n", command, "\n")
 system(command)
 ```
 
-Gene sets were restricted to sizes between 15 and 200 genes to exclude
-very small unstable sets and overly broad non-specific categories.
+## 2.1 Non-Thresholded Gene Set Enrichment Analysis
 
-Summary of enrichment results
+To identify coordinated biological pathways associated with palmitate treatment, we performed **non-thresholded Gene Set Enrichment Analysis (GSEA)** using the **GSEA PreRanked algorithm** implemented in the **Broad Institute GSEA software (version 4.4.0)** (Subramanian et al., 2005).
 
-The GSEA analysis identified several strongly enriched pathways
-associated with lipid metabolism and metabolic stress responses.
+### Ranked gene list
+
+A ranked gene list was generated from the differential expression results (`res_pal`) obtained in the previous assignment. Genes were ranked using a score that combines both the **direction** and **statistical strength** of differential expression:
+
+rank score=sign(log2​FC)×−log10​(P-value)
+
+This ranking places strongly up-regulated genes at the top of the list and strongly down-regulated genes at the bottom, while incorporating statistical significance. The Raw P value is used as GSEA has internal rules of handling multiple hypothesis correction. The ranked gene list was exported as a `.rnk` file and used as input for the GSEAPreRanked analysis.
+
+### Gene set database
+
+Gene sets were obtained from the Bader Lab Gene Matrix Transposed (GMT) repository [@BaderLabGenesets2025]:
+
+Human_GOBP_AllPathways_noPFOCR_no_GO_iea_September_01_2025_symbol.gmt
+
+This dataset includes:
+
+-   Gene Ontology Biological Process (GO BP)
+
+-   curated biological pathway collections
+
+The annotation file corresponds to the September 01, 2025 release and uses human gene symbols. Inferred electronic annotations (IEA) were excluded to prioritize curated or experimentally supported functional annotations.
+
+### GSEA parameters
+
+The analysis was performed using the **GSEAPreRanked** method with the following parameters:
+
+-   Permutation number: 1000
+
+-   Scoring scheme: weighted enrichment statistic
+
+-   Minimum gene set size: 15
+
+-   Maximum gene set size: 200
+
+-   Random seed: 12345
+
+Restricting gene set sizes to **15–200 genes** reduces noise from very small gene sets while excluding overly broad pathways that may lack biological specificity.
+
+## 2.2 Summary of Enrichment Results
+
+The non-thresholded Gene Set Enrichment Analysis (GSEA) identified several significantly enriched pathways associated with **lipid metabolism and metabolic stress responses**.
 
 Among the positively enriched pathways were processes related to:
 
-mTORC1 signaling
+-   mTORC1 signaling
 
-cholesterol biosynthesis regulation
+-   regulation of cholesterol biosynthesis
 
-lipid biosynthetic processes
+-   lipid biosynthetic processes
 
-PPAR-α regulated lipid metabolism
+-   PPAR-α regulated lipid metabolism
 
-steroid metabolism
+-   steroid metabolism
 
-endoplasmic reticulum stress response
+-   endoplasmic reticulum (ER) stress response
 
-These pathways showed high normalized enrichment scores (NES ≈ 2.3–2.5)
-and strong statistical significance.
+These pathways showed high normalized enrichment scores (**NES ≈ 2.3–2.5**) and strong statistical significance (figure 3).
 
-gsea_report_for_na_pos_17731128…
+**Figure 3.** ![](figures/top10pos_results.png)
 
-Several metabolic pathways related to mitochondrial respiration and
-oxidative phosphorylation were negatively enriched.
+**Figure 3.** Top 10 positive enrichment gene sets report returned by GSEA on the pre ranked full gene list.
 
-gsea_report_for_na_neg_17731128…
+In contrast, several pathways related to **mitochondrial respiration and oxidative phosphorylation** were negatively enriched (figure 4)
 
-Overall, the enrichment pattern indicates that palmitate treatment
-strongly affects lipid metabolic pathways and cellular stress responses,
-which is consistent with the known lipotoxic effects of saturated fatty
-acids.
+**Figure 4.** ![](figures/top10neg_results.png)
 
-Circadian-related pathways were detected only weakly and were not among
-the most significant results. For example, circadian clock related gene
-sets appeared with relatively low enrichment scores and non-significant
-FDR values.
+**Figure 4**. Top 10 negative enriched gene set return by GSEA report run on pre ranked gene set
 
-The non-thresholded GSEA analysis provides a complementary perspective
-because it considers all genes ranked by differential expression rather
-than only a subset passing significance thresholds.
+Overall, the enrichment pattern indicates that **palmitate treatment strongly affects lipid metabolic pathways and cellular stress responses**, which is consistent with the known lipotoxic effects of saturated fatty acids.
 
-Compared with the thresholded ORA:
+Circadian-related pathways were detected only weakly and were not among the most significant results. For example, gene sets associated with circadian clock regulation showed relatively low enrichment scores and non-significant FDR values.
 
-GSEA identified stronger enrichment of coordinated metabolic pathways
+## 2.3 Comparison with Thresholded ORA
 
-Lipid metabolism and cholesterol biosynthesis pathways were clearly
-detected
+The non-thresholded GSEA analysis provides a complementary perspective because it considers **all genes ranked by differential expression**, rather than only those passing a predefined significance threshold.
 
-Additional metabolic stress pathways such as ER stress and mTOR
-signaling were also revealed
+Compared with the thresholded ORA results:
 
-However, circadian pathways remained weakly enriched even in the
-non-thresholded analysis.
+-   GSEA detected **stronger enrichment of coordinated metabolic pathways**.
 
-Therefore, while both approaches highlight metabolic responses to
-palmitate, GSEA captures broader coordinated pathway signals that may be
-missed by thresholded ORA.
+-   Lipid metabolism and cholesterol biosynthesis pathways were clearly enriched.
+
+-   Additional metabolic stress pathways, such as **ER stress and mTOR signaling**, were also identified.
+
+However, circadian pathways remained weakly enriched even in the non-thresholded analysis.
 
 Is this a straightforward comparison?
 
-The comparison between thresholded ORA and non-thresholded GSEA is not
-entirely straightforward, because the two methods rely on fundamentally
-different assumptions.
+The comparison between thresholded ORA and non-thresholded GSEA is **not straightforward**, because the two methods rely on different statistical assumptions.
 
-ORA tests whether a selected list of significant genes is
-over-represented in known pathways, which depends heavily on the chosen
-significance threshold.
+ORA tests whether a predefined set of significant genes is over-represented within known pathways. Therefore, the results depend strongly on the differential expression threshold used to define significant genes.
 
-In contrast, GSEA evaluates whether genes belonging to a pathway tend to
-appear toward the top or bottom of the ranked gene list, allowing
-detection of subtle but coordinated expression changes across many
-genes.
+In contrast, GSEA evaluates whether genes belonging to a pathway tend to appear toward the top or bottom of a ranked gene list, allowing detection of **coordinated but subtle expression changes** across many genes.
 
-As a result, GSEA can identify biologically meaningful pathways even
-when individual genes do not pass strict differential expression
-thresholds.
+As a result, GSEA can identify biologically meaningful pathways even when individual genes do not pass strict differential expression thresholds.
 
-Thus, while both analyses point toward lipid metabolism as the dominant
-biological response to palmitate, GSEA provides a more comprehensive
-view of coordinated pathway regulation.
+Overall, while both analyses highlight **lipid metabolism as the dominant biological response to palmitate treatment**, GSEA provides a more comprehensive view of coordinated pathway regulation that missed by thresholded ORA. But at the cost of larger result set to analysis on.
+
+# 3 Cytoscape Visualization of Non-Thresholded GSEA Results
+
+## 3.1 Enrichment Map Construction
+
+The non-thresholded GSEA results were visualized in Cytoscape using the **EnrichmentMap** workflow. In this network representation, each node corresponds to an enriched gene set, and edges represent the similarity between gene sets based on gene overlap. Node colors indicate the signed enrichment score, where orange represents positively enriched pathways and blue represents negatively enriched pathways.
+
+The EnrichmentMap was generated using the following thresholds:
+
+-   **FDR q-value cutoff:** 0.05
+
+-   **Edge similarity cutoff:** 0.375
+
+-   **Similarity metric:** Jaccard + overlap coefficient (default EnrichmentMap metric)
+
+-   **Gene set size limits:** 15–200 genes
+
+Under these thresholds, the resulting network contained:
+
+-   **Nodes (gene sets):** *293*
+
+-   **Edges (similarity relationships):** 1594
+
+The raw enrichment map prior to manual layout is shown in **Figure 5**.
+
+![Raw Enrichment Map](figures/A2_enrichment.png)
+
+**Figure 5.** Raw EnrichmentMap network generated from non-thresholded GSEA results prior to manual layout. Nodes represent enriched gene sets and edges represent pathway similarity based on overlapping genes.
+
+## 3.2 Network Annotation
+
+The enrichment map was annotated using the **AutoAnnotate** Cytoscape application. Clusters of related gene sets were automatically detected and labeled using the **WordCloud** labeling algorithm.
+
+Annotation parameters were:
+
+-   **Label column:** `GS_DESCR`
+
+-   **Cluster detection level:** middle
+
+-   **Maximum words per label:** 3
+
+-   **Minimum word occurrence:** 1
+
+-   **Adjacent word bonus:** 8
+
+-   **Label generation:** WordCloud app
+
+This process grouped related pathways into biologically interpretable clusters. The annotated enrichment map of the overview of the pathways is show in figure 6.
+
+**Figure 6**.
+
+![Annotated Enrichment Map](figures/A2_enrichment_Annotated.pdf)
+
+**Figure 6.** Annotated enrichment map after AutoAnnotate clustering. Pathways with overlapping gene content are grouped into clusters and labeled with representative biological terms.
+
+**Legend 6.**![Annottated Enrichment Map legend](figures/network_overview_legends.pdf)
+
+**Legend 6.**
+
+### Circadian Gene set
+
+There is one small fraction of the gene set of circadian genes. Zooming in we see two gene sets of human circadian rythmic gene set.
+
+**Figure 7**. ![circ gene](figures/circ_gene.png)
+
+**Figure 7.** Zoomed in Screen shot of the two group of circadian rhythm genes.
+
+## 3.3 Collapsed Theme Network
+
+To further simplify interpretation, the annotated network was collapsed into a **theme network**, where each node represents a cluster of related pathways rather than individual gene sets. This representation highlights the major biological themes emerging from the enrichment analysis.
+
+The major themes identified include:
+
+| Theme                                  | Cluster size |
+|----------------------------------------|--------------|
+| Synthesis / translation pathways       | 22           |
+| ATP / electron transport               | 21           |
+| Regulation of biosynthetic processes   | 17           |
+| Fatty acid metabolism                  | 16           |
+| Acyl-CoA metabolism                    | 13           |
+| Plasma lipoprotein homeostasis         | 11           |
+| Intracellular sterol transport         | 8            |
+| ER stress / unfolded protein response  | 6            |
+| Mitochondrial translation / metabolism | 6            |
+| Hypoxia / oxygen response              | 6            |
+| miRNA transcription regulation         | 5            |
+| Calnexin–calreticulin cycle            | 4            |
+| Epigenetic regulation (MLL4 complexes) | 4            |
+| DNA repair (base excision repair)      | 3            |
+| Lipid storage localization             | 3            |
+
+Table 3. Biological Themes presented after clustering with Autoannotation
+
+A small cluster associated with **circadian rhythm genes** was also detected as mentioned above in figure 3:
+
+-   **CIRCADIAN RHYTHM GENES (WikiPathways WP3594)**
+
+-   **CIRCADIAN RHYTHM (<GO:0007623>)**
+
+This cluster contained **two pathways**, indicating that circadian gene sets were detected but formed a relatively small module compared to metabolic pathways.
+
+**Figure 8.** ![collapsed](figures/A2_collapsed_1.png)
+
+![collapsed](figures/A2_collapsed_2.png) **Figure 8.**Collapsed theme network summarizing major biological processes represented in the enrichment map. Each node represents a cluster of related pathways.
+
+## 3.4 Interpretation of Cytoscape Results
+
+## Relationship to the original paper
+
+The enrichment map strongly supports the conclusions of the original study. The dominant clusters correspond to **lipid metabolism and cholesterol metabolism pathways**, including fatty acid metabolism, acyl-CoA processing, sterol transport, and lipoprotein homeostasis. These pathways are consistent with the biological response expected from palmitate treatment, which increases lipid availability and triggers metabolic rewiring [@EckelMahan2013].
+
+The original paper reported that palmitate-responsive genes were enriched in **lipid metabolic processes**, supporting the idea that saturated fatty acids alter metabolic pathways in skeletal muscle cells.
+
+In contrast, the circadian cluster is small and weakly connected in the network. This observation aligns with the findings of the paper, which showed that palmitate alters the **rhythmicity of gene expression** rather than the steady-state expression of core clock genes. As a result, circadian genes do not appear strongly enriched in differential expression–based analyses. [@EckelMahan2013]
+
+The detection of a small circadian module in the non-thresholded GSEA, but not in the thresholded ORA analysis, supports this interpretation. GSEA can detect coordinated but subtle shifts in gene sets even when individual genes do not pass differential expression thresholds.
+
+### Differences from Thresholded ORA
+
+Compared with the thresholded ORA performed earlier:
+
+**Thresholded ORA**
+
+-   identified lipid metabolism pathways
+
+-   did not detect circadian pathways
+
+-   was dominated by strongly differentially expressed genes
+
+**Non-thresholded GSEA**
+
+-   detected lipid metabolism again
+
+-   revealed additional biological modules
+
+-   identified a small circadian gene cluster
+
+-   highlighted stress and epigenetic regulatory pathways
+
+Because GSEA analyzes the entire ranked gene list, it is able to detect **coordinated pathway shifts** even when individual genes show only modest changes.
+
+### Additional biological insights
+
+Several additional clusters revealed interesting biological signals beyond lipid metabolism:
+
+**ER stress and unfolded protein response**
+
+Clusters such as *calnexin–calreticulin cycle*, *cytosol retrograde ERAD*, and *XBP1 activates chaperones* indicate activation of protein quality-control pathways. These responses are known to occur under **lipotoxic stress caused by saturated fatty acids**. [@Hotamisligil2010]
+
+**Epigenetic regulation**
+
+Clusters related to **MLL4 epigenetic complexes** and transcriptional regulation suggest chromatin-level regulatory processes. This is consistent with the mechanism described in the paper, where palmitate alters enhancer activity through **histone H3K27 acetylation**. [@Creyghton2010]
+
+**Mitochondrial and metabolic pathways**
+
+Modules related to **ATP production, electron transport, and mitochondrial translation** indicate alterations in cellular energy metabolism, which is expected during fatty-acid–induced metabolic stress.
+
+### Overall interpretation
+
+Together, the Cytoscape enrichment map reveals that palmitate treatment primarily affects **lipid metabolism, mitochondrial metabolism, and stress-response pathways**, while circadian pathways are only weakly represented. This pattern strongly supports the model proposed in the original study: palmitate disrupts circadian transcriptomics primarily through metabolic and epigenetic mechanisms to effect rhythmic behaviour rather than through large changes in the expression levels of core clock genes.
+
+However, it also demonstrates the limits of pure diffrential experession analysis in these circadian genen sets without dedicated rhythmic expression algorithm. Comparing to the original paper we are unable to identify if the genes starts or stops rhythmic behavior to further hypothesis the relation of the lipid metabolic and epigenetic pathways to these rhythmic genes in this case that overall expression level is not significant altered.
+
+# 4 Answers and Conclusion
+
+The Headers are named to match the corresponding questions in the order of the questions. Please use the table of content to browse directly to each question.
+
+## 4.1 Conclusion
+
+In this study, we analyzed RNA-seq data to investigate the transcriptional effects of palmitate treatment using differential expression and pathway enrichment analyses. Differential expression analysis identified relatively few genes passing strict FDR thresholds, suggesting that palmitate induces modest but coordinated transcriptional changes. Thresholded ORA highlighted pathways related to **lipid metabolism**, while non-thresholded GSEA revealed broader metabolic and stress-response pathways including **cholesterol biosynthesis, fatty acid metabolism, and ER stress**. Cytoscape enrichment maps further showed that lipid metabolic pathways form the dominant functional modules. Circadian-related pathways were weakly enriched, consistent with the original study’s finding that palmitate primarily affects **rhythmic gene behavior rather than steady-state expression levels of core clock genes**. Overall, the results support the model that palmitate disrupts circadian biology indirectly through metabolic and epigenetic mechanisms.
+
+# Reference
