@@ -1,7 +1,11 @@
 ---
 title: "R Notebook"
 output: html_notebook
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
+
 ```{r load, include=FALSE}
 required_pkgs <- c(
   "DBI",
@@ -13,7 +17,9 @@ required_pkgs <- c(
   "GSA",
   "BiocManager",
   "RCy3",
-  "httr"
+  "httr",
+  "tidyr",
+  "stringr"
 )
 
 for (pkg in required_pkgs) {
@@ -23,7 +29,10 @@ for (pkg in required_pkgs) {
   library(pkg, character.only = TRUE)
 }
 ```
-This is part of the same process as A1.4 for we stored the data before hypothesis testing.
+
+This is part of the same process as A1.4 for we stored the data before
+hypothesis testing.
+
 ```{r reload-datasets}
 ## ---- load-a1-objects ----
 
@@ -33,7 +42,9 @@ dge  <- obj$dge_filtered
 meta <- obj$meta
 mappings <- obj$mappings
 ```
+
 Recreate design matrix
+
 ```{r recreate design}
 ## ---- recreate-design ----
 
@@ -41,10 +52,10 @@ meta$timepoint <- factor(meta$timepoint)
 meta$treatment <- factor(meta$treatment, levels = c("CTL", "PAL"))
 
 design <- model.matrix(~ timepoint + treatment, data = meta)
-
-colnames(design)
 ```
+
 Re-estimate dispersion and fit QL model
+
 ```{r refit QL}
 ## ---- fit-edger-model ----
 
@@ -52,11 +63,15 @@ dge <- estimateDisp(dge, design)
 
 fit <- glmQLFit(dge, design)
 ```
+
 Verify if its working as before:
-``` {r BCV}
+
+```{r BCV}
 plotBCV(dge)
 ```
+
 Hypoothesis testing
+
 ```{r ql-test}
 ## ---- ql-test ----
 
@@ -68,17 +83,22 @@ qlf_pal_vs_ctl <- glmQLFTest(
 res_pal <- topTags(qlf_pal_vs_ctl, n = Inf)$table %>%
   tibble::rownames_to_column("ensembl")
 ```
+
 Verify same number as before:
+
 ```{r }
 sum(res_pal$PValue < 0.05)
 ```
+
 ```{r}
 sig_res <- res_pal %>%
   filter(FDR < 0.05, abs(logFC) >= 1)
 
 nrow(sig_res)
 ```
+
 Split into up and down:
+
 ```{r}
 sig_up <- sig_res %>% filter(logFC > 0)
 sig_down <- sig_res %>% filter(logFC < 0)
@@ -87,8 +107,7 @@ nrow(sig_up)
 nrow(sig_down)
 ```
 
-1.1 Method Choice
-Method: Thresholded Over-Representation Analysis (ORA)
+1.1 Method Choice Method: Thresholded Over-Representation Analysis (ORA)
 
 We use:
 
@@ -100,28 +119,39 @@ Benjamini–Hochberg FDR correction
 
 Why this method?
 
-We already defined significant genes using FDR < 0.05 and |logFC| ≥ 1.
+We already defined significant genes using FDR \< 0.05 and \|logFC\| ≥
+1.
 
 ORA is appropriate when using a pre-thresholded gene list.
 
 It tests whether gene sets are enriched beyond random expectation.
 
-This is NOT GSEA (ranked analysis). This is classic ORA.
-
 We use g:Profiler built-in annotation sources:
-``` {r Sources}
+
+```{r Sources}
 gprofsources = c("GO:BP", "REAC", "WP")
 ```
 
-Enrichment analysis was performed using g:Profiler (version X.X) with Homo sapiens annotation databases including GO (BP, MF, CC), Reactome, WikiPathways, KEGG, transcription factor targets, microRNA targets, CORUM complexes, Human Protein Atlas, and Human Phenotype Ontology.
+Enrichment analysis was performed using g:Profiler (version 2025-03-16)
+with Homo sapiens annotation databases including GO (BP, MF, CC),
+Reactome, WikiPathways, KEGG, transcription factor targets, microRNA
+targets, CORUM complexes, Human Protein Atlas, and Human Phenotype
+Ontology.
 
 Annotation version
-```{r Report Version}
+
+```{r Report Version, include = FALSE}
 get_version_info(organism = "hsapiens")
 ```
-```{r inspect gene lists}
+
+Inspect gene lists
+
+```{r inspect gene lists, include = FALSE}
 head(sig_up)
 ```
+
+Extract the Gene list by unique ensembl or biomart symbel.
+
 ```{r Create gene symbel only list}
 genes_up   <- unique(sig_up$ensembl)
 genes_down <- unique(sig_down$ensembl)
@@ -130,7 +160,9 @@ genes_all  <- unique(sig_res$ensembl)
 length(genes_up)
 length(genes_down)
 ```
-Upregulated
+
+Run Upregulated
+
 ```{r up}
 gost_up <- gost(
   query = genes_up,
@@ -144,7 +176,9 @@ gost_up <- gost(
 
 res_up <- gost_up$result
 ```
-Down
+
+Run Downregulated
+
 ```{r down}
 gost_down <- gost(
   query = genes_down,
@@ -158,7 +192,9 @@ gost_down <- gost(
 
 res_down <- gost_down$result
 ```
+
 Combined
+
 ```{r all}
 gost_all <- gost(
   query = genes_all,
@@ -172,44 +208,56 @@ gost_all <- gost(
 
 res_all <- gost_all$result
 ```
-We performed thresholded over-representation analysis (ORA) using the gprofiler2::gost() function with the following parameters:
 
-🔹 query = genes_up / genes_down / genes_all
+We performed thresholded over-representation analysis (ORA) using the
+gprofiler2::gost() function with the following parameters:
 
-The query represents the list of significantly differentially expressed genes identified from edgeR analysis (FDR < 0.05 and |log2FC| ≥ 1).
-Up-regulated, down-regulated, and combined gene sets were analyzed separately to preserve biological directionality.
+query = genes_up / genes_down / genes_all
 
-🔹 organism = "hsapiens"
+The query represents the list of significantly differentially expressed
+genes identified from edgeR analysis (FDR \< 0.05 and \|log2FC\| ≥ 1).
+Up-regulated, down-regulated, and combined gene sets were analyzed
+separately to preserve biological directionality.
 
-The organism parameter specifies that Homo sapiens annotation databases were used for enrichment analysis.
+organism = "hsapiens"
+
+The organism parameter specifies that Homo sapiens annotation databases
+were used for enrichment analysis.
 
 significant = FALSE
 
-We set significant = FALSE to retrieve all enrichment results rather than restricting output to only those passing g:Profiler’s internal significance threshold.
-This allows us to apply our own filtering criteria downstream.
+We set significant = FALSE to retrieve all enrichment results rather
+than restricting output to only those passing g:Profiler’s internal
+significance threshold. This allows us to apply our own filtering
+criteria downstream.
 
 ordered_query = FALSE
 
-Because this analysis is thresholded ORA (not ranked GSEA), genes were treated as an unranked set.
-Therefore, ordered_query = FALSE was appropriate.
+Because this analysis is thresholded ORA (not ranked GSEA), genes were
+treated as an unranked set. Therefore, ordered_query = FALSE was
+appropriate.
 
 exclude_iea = TRUE
 
-Inferred Electronic Annotations (IEA) were excluded to increase annotation reliability by limiting enrichment to manually curated or experimentally supported terms.
+Inferred Electronic Annotations (IEA) were excluded to increase
+annotation reliability by limiting enrichment to manually curated or
+experimentally supported terms.
 
 correction_method = "fdr"
 
-Multiple hypothesis correction was performed using the Benjamini–Hochberg False Discovery Rate (FDR) method to control for false positives across many tested gene sets.
+Multiple hypothesis correction was performed using the
+Benjamini–Hochberg False Discovery Rate (FDR) method to control for
+false positives across many tested gene sets.
 
 sources = gprofsources
 
 The following annotation databases were included:
 
-GO:BP (Biological Process)
+<GO:BP> (Biological Process)
 
-GO:MF (Molecular Function)
+<GO:MF> (Molecular Function)
 
-GO:CC (Cellular Component)
+<GO:CC> (Cellular Component)
 
 REAC (Reactome pathways)
 
@@ -227,10 +275,146 @@ HPA (Human Protein Atlas)
 
 HP (Human Phenotype Ontology)
 
-Including multiple annotation sources allows interrogation of biological processes, pathways, regulatory networks, and disease associations.
+Including multiple annotation sources allows interrogation of biological
+processes, pathways, regulatory networks, and disease associations.
 
-Size filtered Results
-``` {r filter size}
+Analysis:
+
+The orginal paper applies RAIN algorithm for seperating cirardian genes
+from other effected genes as lipid intake alters well studied pathway
+such as lipid intake. Here we see if a bulk enrichment non theresholded
+ora can identify cirardian genes alone with lipid intake.
+
+1.  Identify the biological expectation from the paper
+
+From the paragraph:
+
+“Palmitate-responsive genes were associated with gene ontology pathways
+related to lipid metabolism (Figure 1E).”
+
+So the expected pathways include things like:
+
+Typical lipid-related GO BP terms:
+
+lipid metabolic process
+
+fatty acid metabolic process
+
+fatty acid beta oxidation
+
+lipid biosynthetic process
+
+sterol metabolic process
+
+lipid transport
+
+These become your benchmark.
+
+If ORA finds these → result is relevant.
+
+```{r keyword rules}
+classify_theme <- function(df) {
+  df %>%
+    mutate(
+      theme = case_when(
+        str_detect(term_name, regex("circadian|clock|rhythm", ignore_case = TRUE)) ~ "Circadian",
+        str_detect(term_name, regex("lipid|fatty|cholesterol|sterol|acyl", ignore_case = TRUE)) ~ "Lipid metabolism",
+        TRUE ~ "Other"
+      )
+    )
+}
+```
+
+```{r Apply classification}
+res_up_theme   <- classify_theme(res_up)
+res_all_theme  <- classify_theme(res_all)
+```
+
+```{r count}
+count_theme <- function(df, label) {
+  df %>%
+    group_by(theme) %>%
+    summarise(count = n(), .groups = "drop") %>%
+    mutate(group = label)
+}
+
+summary_up   <- count_theme(res_up_theme, "Upregulated")
+summary_all  <- count_theme(res_all_theme, "All")
+```
+
+```{r threshold summery}
+threshold_summary <- bind_rows(
+  summary_up,
+  summary_all
+)
+
+themes <- c("Lipid metabolism", "Circadian", "Other")
+groups <- c("Upregulated", "Downregulated", "All")
+
+threshold_summary <- threshold_summary %>%
+  complete(group = groups, theme = themes, fill = list(count = 0))
+```
+
+```{r plot}
+library(ggplot2)
+
+ggplot(threshold_summary, aes(x = group, y = count, fill = theme)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(
+    title = "Enriched genesets by biological theme (Thresholded ORA)",
+    x = "Gene set",
+    y = "Number of genesets",
+    fill = "Theme"
+  )
+```
+
+figure.x Summery of gene set counts for up regulated genesets, down
+regulated genesets and both gene sets combined.
+
+```{r table of top term}
+get_top_terms <- function(df, group_name) {
+  df %>%
+    group_by(theme) %>%
+    slice_min(p_value, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    select(theme, top_term = term_name, p_value) %>%
+    mutate(group = group_name)
+}
+
+top_up  <- get_top_terms(res_up_theme, "Upregulated")
+top_all <- get_top_terms(res_all_theme, "All")
+
+top_terms <- bind_rows(top_up, top_all)
+
+themes <- c("Lipid metabolism", "Circadian", "Other")
+groups <- c("Upregulated", "Downregulated", "All")
+
+top_terms <- top_terms %>%
+  complete(group = groups, theme = themes,
+           fill = list(top_term = NA, p_value = NA))
+
+threshold_summary_table <- threshold_summary %>%
+  left_join(top_terms, by = c("group", "theme"))
+
+knitr::kable(
+  threshold_summary_table,
+  caption = "Summary of enriched pathways by biological theme with top representative term"
+)
+```
+
+Table x. Summery of top term and significant level for each theme.
+
+Interpertation: the g:profiling by fdr cutoff o.o5 did not identify any
+significant circardian gene set, but identified 53 lipid metabolism
+related geneset and 579 other geneset in using the positive experssed
+gene list. Using both positive and negative gene together did not effect
+the results as no significant gene set for 3 negative regulated gene
+added. see table x, figure x
+
+Size filtered Results reusing similar code
+
+```{r filter size}
 min_gs_size <- 3
 max_gs_size <- 250
 min_intersection <- 2
@@ -244,14 +428,88 @@ res_all_f <- subset(res_all,
                     term_size >= min_gs_size &
                     term_size <= max_gs_size &
                     intersection_size >= min_intersection)
+
+classify_theme <- function(df) {
+  df %>%
+    mutate(
+      theme = case_when(
+        str_detect(term_name, regex("circadian|clock|rhythm", ignore_case = TRUE)) ~ "Circadian",
+        str_detect(term_name, regex("lipid|fatty|cholesterol|sterol|acyl", ignore_case = TRUE)) ~ "Lipid metabolism",
+        TRUE ~ "Other"
+      )
+    )
+}
+
+res_up_f_theme  <- classify_theme(res_up_f)
+res_all_f_theme <- classify_theme(res_all_f)
+
+count_theme <- function(df, label) {
+  df %>%
+    group_by(theme) %>%
+    summarise(count = n(), .groups = "drop") %>%
+    mutate(group = label)
+}
+
+summary_up_f  <- count_theme(res_up_f_theme, "Upregulated")
+summary_all_f <- count_theme(res_all_f_theme, "All")
+
+filtered_summary <- bind_rows(summary_up_f, summary_all_f)
+
+get_top_terms <- function(df, group_name) {
+  df %>%
+    group_by(theme) %>%
+    slice_min(p_value, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    select(theme, top_term = term_name, p_value) %>%
+    mutate(group = group_name)
+}
+
+top_up_f  <- get_top_terms(res_up_f_theme, "Upregulated")
+top_all_f <- get_top_terms(res_all_f_theme, "All")
+
+top_terms_f <- bind_rows(top_up_f, top_all_f)
+
+themes <- c("Lipid metabolism", "Circadian", "Other")
+groups <- c("Upregulated", "All")
+
+filtered_summary <- filtered_summary %>%
+  complete(group = groups, theme = themes, fill = list(count = 0))
+
+top_terms_f <- top_terms_f %>%
+  complete(group = groups, theme = themes,
+           fill = list(top_term = NA, p_value = NA))
+
+filtered_summary_table <- filtered_summary %>%
+  left_join(top_terms_f, by = c("group", "theme"))
+
+knitr::kable(
+  filtered_summary_table,
+  caption = "Filtered ORA pathway summary with representative term per biological theme"
+)
 ```
 
-Part 2 Unthrreshold
-set output location:
+Table Y. Top term anhd count for each theme after filtering geneset size
+3\<size\<200.
+
+The result shows less lipid metabolism for less general pathways after
+filtering with a smaller total gene. Ther are 8 for lipid metabolism, 52
+for other and still 0 for circardian genes.
+
+In the paper it was conclued as large fraction of cycling genes stops
+cycling after palmitate treatment, whle only influenced the number of
+rhythmic genes, with minimal effect on expression of clock machenery
+components. By stopping cyclic behavior but maintain a similar
+experssion level, it aligns with our result of the insignificant of the
+cyclic genes' diffrenetial expression.
+
+Part 2 Unthrreshold set output location:
+
 ```{r output location}
 working_dir <- "./data"
 ```
+
 create ranked gene list
+
 ```{r ranked gene list}
 library(dplyr)
 
@@ -283,6 +541,7 @@ write.table(
 ```
 
 Download fixed version fir GMT from baderlab
+
 ```{r download GMT}
 library(RCurl)
 
@@ -298,17 +557,17 @@ if (!file.exists(gmt_path)) {
   download.file(gmt_url, destfile = gmt_path, mode = "wb")
 }
 ```
-September 01, 2025
-GO BP + Pathways
-No IEA
-Human symbols
+
+September 01, 2025 GO BP + Pathways No IEA Human symbols
 
 Configure GSEA CLI
+
 ```{r }
 gsea_jar <- path.expand("~/GSEA_4.4.0/gsea-cli.sh")
 ```
 
 Run:
+
 ```{r run GSEA}
 analysis_name <- "PAL_vs_CTL"
 
@@ -335,18 +594,89 @@ command <- paste(
 cat("Running command:\n", command, "\n")
 system(command)
 ```
-Gene sets were restricted to sizes between 15 and 200 genes to exclude very small unstable sets and overly broad non-specific categories, following recommended GSEA and EnrichmentMap guidelines.
 
-Cytoscape Docker Connection:
-```{r Cytoscape connection}
-is_docker <- TRUE
-if(is_docker){
-  current_base = "host.docker.internal:8787/v1"
-  .defaultBaseUrl <- "http://host.docker.internal:8787/v1"
-} else{
-  current_base = "localhost:8787/v1"
-}
+Gene sets were restricted to sizes between 15 and 200 genes to exclude
+very small unstable sets and overly broad non-specific categories.
 
-cytoscapePing (base.url = current_base)
-```
+Summary of enrichment results
 
+The GSEA analysis identified several strongly enriched pathways
+associated with lipid metabolism and metabolic stress responses.
+
+Among the positively enriched pathways were processes related to:
+
+mTORC1 signaling
+
+cholesterol biosynthesis regulation
+
+lipid biosynthetic processes
+
+PPAR-α regulated lipid metabolism
+
+steroid metabolism
+
+endoplasmic reticulum stress response
+
+These pathways showed high normalized enrichment scores (NES ≈ 2.3–2.5)
+and strong statistical significance.
+
+gsea_report_for_na_pos_17731128…
+
+Several metabolic pathways related to mitochondrial respiration and
+oxidative phosphorylation were negatively enriched.
+
+gsea_report_for_na_neg_17731128…
+
+Overall, the enrichment pattern indicates that palmitate treatment
+strongly affects lipid metabolic pathways and cellular stress responses,
+which is consistent with the known lipotoxic effects of saturated fatty
+acids.
+
+Circadian-related pathways were detected only weakly and were not among
+the most significant results. For example, circadian clock related gene
+sets appeared with relatively low enrichment scores and non-significant
+FDR values.
+
+The non-thresholded GSEA analysis provides a complementary perspective
+because it considers all genes ranked by differential expression rather
+than only a subset passing significance thresholds.
+
+Compared with the thresholded ORA:
+
+GSEA identified stronger enrichment of coordinated metabolic pathways
+
+Lipid metabolism and cholesterol biosynthesis pathways were clearly
+detected
+
+Additional metabolic stress pathways such as ER stress and mTOR
+signaling were also revealed
+
+However, circadian pathways remained weakly enriched even in the
+non-thresholded analysis.
+
+Therefore, while both approaches highlight metabolic responses to
+palmitate, GSEA captures broader coordinated pathway signals that may be
+missed by thresholded ORA.
+
+Is this a straightforward comparison?
+
+The comparison between thresholded ORA and non-thresholded GSEA is not
+entirely straightforward, because the two methods rely on fundamentally
+different assumptions.
+
+ORA tests whether a selected list of significant genes is
+over-represented in known pathways, which depends heavily on the chosen
+significance threshold.
+
+In contrast, GSEA evaluates whether genes belonging to a pathway tend to
+appear toward the top or bottom of the ranked gene list, allowing
+detection of subtle but coordinated expression changes across many
+genes.
+
+As a result, GSEA can identify biologically meaningful pathways even
+when individual genes do not pass strict differential expression
+thresholds.
+
+Thus, while both analyses point toward lipid metabolism as the dominant
+biological response to palmitate, GSEA provides a more comprehensive
+view of coordinated pathway regulation.
